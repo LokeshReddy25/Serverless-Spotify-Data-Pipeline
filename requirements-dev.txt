@@ -1,0 +1,10 @@
+# Local development and CI. Versions are the ones the test suite was verified with
+# (Python 3.11.9 on Windows). Tests use moto; no AWS account or credentials are needed.
+pandas==3.1.1
+pyarrow==26.0.1
+boto3==1.44.12
+awswrangler==3.18.0
+moto[s3,iam,awslambda,events,glue,athena,logs,sts]==5.2.6
+pytest==9.2.0
+pytest-cov==7.1.0
+flake8==7.5.0
