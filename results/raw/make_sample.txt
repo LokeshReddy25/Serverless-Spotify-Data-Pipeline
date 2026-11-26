@@ -1,0 +1,5 @@
+$ python benchmarks/make_sample.py 50
+wrote C:\Users\acer\Desktop\Serverless-Spotify-Data-Pipeline\benchmarks\sample_data\synthetic_playlist_50.json bytes=28102 items=50
+$ sha256sum + wc -c
+19a49ff8e9107facbbc043ef258ec7069206d146400c7c97cf62bb27d6596610 *benchmarks/sample_data/synthetic_playlist_50.json
+28102 benchmarks/sample_data/synthetic_playlist_50.json

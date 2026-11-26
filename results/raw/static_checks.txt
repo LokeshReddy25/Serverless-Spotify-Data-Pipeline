@@ -1,0 +1,9 @@
+$ python -m py_compile <all .py>
+py_compile: all 9 files OK
+$ python -m pyflakes deploy_all.py infra src
+infra\setup_glue_athena.py:76:11: f-string is missing placeholders
+infra\setup_iam_roles.py:57:11: f-string is missing placeholders
+infra\setup_lambda.py:96:11: f-string is missing placeholders
+src\extract_lambda\lambda_function.py:51:9: local variable 'get_token_start' is assigned to but never used
+src\extract_lambda\lambda_function.py:53:15: f-string is missing placeholders
+pyflakes exit=1

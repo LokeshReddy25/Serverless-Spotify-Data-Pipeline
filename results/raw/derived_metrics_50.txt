@@ -1,0 +1,10 @@
+$ python benchmarks/derive_metrics.py results/raw/bench_pipeline_50.json benchmarks/sample_data/synthetic_playlist_50.json
+raw_json_bytes=28102
+parquet_bytes={'albums': 6228, 'artists': 4619, 'tracks': 9196} total=20043
+raw_json_bytes / total_parquet_bytes = 1.402
+total_parquet_bytes / raw_json_bytes = 0.713
+pandas=3.1.1
+albums=40 year_only_release_dates_in_input=4 full_date_inputs=36
+null_release_dates_after_to_datetime=36
+first_input_value_format= year-only
+exit=0

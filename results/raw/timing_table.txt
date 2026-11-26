@@ -1,0 +1,5 @@
+$ (formatting of results/raw/bench_pipeline_50.json, ms to 1 decimal)
+extract_import_s: median=21.2 ms  min=16.7 ms  max=37.9 ms  n=5
+extract_handler_s: median=26.6 ms  min=22.2 ms  max=28.3 ms  n=5
+transform_import_s: median=3214.5 ms  min=3154.1 ms  max=10924.6 ms  n=5
+transform_handler_s: median=341.7 ms  min=290.9 ms  max=418.3 ms  n=5

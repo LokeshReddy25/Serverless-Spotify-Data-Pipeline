@@ -1,0 +1,149 @@
+$ python benchmarks/bench_pipeline.py benchmarks/sample_data/synthetic_playlist_50.json 5 results/raw/bench_pipeline_50.json
+started: 2026-11-26T16:53:15+05:30
+trial 1/5 ok
+trial 2/5 ok
+trial 3/5 ok
+trial 4/5 ok
+trial 5/5 ok
+{
+  "sample_file": "benchmarks/sample_data/synthetic_playlist_50.json",
+  "timings_seconds": {
+    "extract_import_s": {
+      "median": 0.021202899995842017,
+      "min": 0.016731100011384115,
+      "max": 0.03793730000325013,
+      "n": 5,
+      "values": [
+        0.03226229999563657,
+        0.03793730000325013,
+        0.020651200000429526,
+        0.021202899995842017,
+        0.016731100011384115
+      ]
+    },
+    "extract_handler_s": {
+      "median": 0.026625400001648813,
+      "min": 0.022216600002138875,
+      "max": 0.02829250000650063,
+      "n": 5,
+      "values": [
+        0.0270023999910336,
+        0.026625400001648813,
+        0.02829250000650063,
+        0.02304580000054557,
+        0.022216600002138875
+      ]
+    },
+    "transform_import_s": {
+      "median": 3.214474699998391,
+      "min": 3.1540818000066793,
+      "max": 10.924640400000499,
+      "n": 5,
+      "values": [
+        10.924640400000499,
+        3.214474699998391,
+        3.38237749999098,
+        3.1932196999987355,
+        3.1540818000066793
+      ]
+    },
+    "transform_handler_s": {
+      "median": 0.3416618000046583,
+      "min": 0.2908927000098629,
+      "max": 0.4183150000026217,
+      "n": 5,
+      "values": [
+        0.4183150000026217,
+        0.33548090000113007,
+        0.3451381000049878,
+        0.3416618000046583,
+        0.2908927000098629
+      ]
+    }
+  },
+  "raw_json_bytes_in_s3": [
+    28102
+  ],
+  "parquet_bytes_per_table": {
+    "albums": [
+      6228
+    ],
+    "artists": [
+      4619
+    ],
+    "tracks": [
+      9196
+    ]
+  },
+  "first_trial_detail": {
+    "extract_import_s": 0.03226229999563657,
+    "extract_handler_s": 0.0270023999910336,
+    "raw_json_bytes_in_s3": 28102,
+    "transform_import_s": 10.924640400000499,
+    "transform_handler_s": 0.4183150000026217,
+    "parquet_objects": {
+      "albums": {
+        "key": "transformed_data/albums/album_data_2026-11-26_16-53-31.parquet",
+        "bytes": 6228,
+        "rows": 40,
+        "columns": [
+          "album_id",
+          "album_name",
+          "album_release_date",
+          "album_total_tracks",
+          "album_url"
+        ],
+        "dtypes": {
+          "album_id": "string",
+          "album_name": "string",
+          "album_release_date": "datetime64[ns]",
+          "album_total_tracks": "Int64",
+          "album_url": "string"
+        }
+      },
+      "artists": {
+        "key": "transformed_data/artists/artist_data_2026-11-26_16-53-31.parquet",
+        "bytes": 4619,
+        "rows": 35,
+        "columns": [
+          "artist_id",
+          "artist_name",
+          "artist_url"
+        ],
+        "dtypes": {
+          "artist_id": "string",
+          "artist_name": "string",
+          "artist_url": "string"
+        }
+      },
+      "tracks": {
+        "key": "transformed_data/tracks/track_data_2026-11-26_16-53-31.parquet",
+        "bytes": 9196,
+        "rows": 50,
+        "columns": [
+          "track_id",
+          "track_name",
+          "track_popularity",
+          "track_duration_ms",
+          "album_id",
+          "artist_id",
+          "added_at"
+        ],
+        "dtypes": {
+          "track_id": "string",
+          "track_name": "string",
+          "track_popularity": "Int64",
+          "track_duration_ms": "Int64",
+          "album_id": "string",
+          "artist_id": "string",
+          "added_at": "datetime64[ns, UTC]"
+        }
+      }
+    },
+    "parquet_compression_codec": "SNAPPY",
+    "raw_keys_after_transform": [
+      "raw_data/processed/spotify_top_50_2026-11-26_16-53-20.json"
+    ]
+  }
+}
+exit=0
