@@ -1,0 +1,38 @@
+# Evidence for moving to python3.14 + AWSSDKPandas-Python314 (collected 2026-11-26, UTC+05:30)
+
+## 1. Supported Python runtimes
+# Source: https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html (fetched 2026-11-26T19:32:56+05:30)
+# Python rows of the supported-runtimes table (Name | Identifier | Operating system | Deprecation date | ...):
+#   Python 3.15 | python3.15 | Amazon Linux 2023 | deprecation Jun 30, 2029
+#   Python 3.14 | python3.14 | Amazon Linux 2023 | deprecation Jun 30, 2029
+#   Python 3.13 | python3.13 | Amazon Linux 2023 | deprecation Jun 30, 2029
+#   Python 3.12 | python3.12 | Amazon Linux 2023 | deprecation Oct 31, 2028
+#   Python 3.11 | python3.11 | Amazon Linux 2 | deprecation Jun 30, 2027
+# Occurrences of the word 'preview' on the page: 0
+
+## 2. AWS SDK for pandas layers
+# Latest release (GitHub API /repos/aws/aws-sdk-pandas/releases/latest): 3.18.0, published 2026-10-27T21:55:29Z
+# Layer list: https://aws-sdk-pandas.readthedocs.io/en/3.18.0/layers.html (source: docs/source/layers.rst @3.18.0)
+# Python versions with layers in 3.18.0:
+#   3.10
+#   3.11
+#   3.12
+#   3.13
+#   3.14
+# Python 3.15 layers in 3.18.0: 0; on unreleased main branch: 0
+# All 30 x86_64 Python 3.14 ARNs in infra/lambda_layers.py were found verbatim on the rendered readthedocs page (fetched 2026-11-26T19:37:51+05:30).
+
+## 3. Contents of the 3.18.0 layer
+# pyarrow: https://raw.githubusercontent.com/aws/aws-sdk-pandas/3.18.0/building/lambda/build-lambda-layer.sh
+#   14:export ARROW_VERSION=24.0.0
+#   103:pip3 install . ${NO_BINARY_FLAG} --find-links="${PYARROW_WHEEL_DIR}" -t ./python ".[redshift,mysql,postgres,gremlin,opensearch,openpyxl]" "pyarrow==${ARROW_VERSION}"
+#   112:rm -rf python/pyarrow*
+#   117:cp -r /aws-sdk-pandas/dist/pyarrow_files/pyarrow* python/
+# Python 3.14 layer image: building/lambda/build-docker-images.sh uses base_image=public.ecr.aws/lambda/python:3.14 with Dockerfile.al2023
+# pandas/numpy: https://raw.githubusercontent.com/aws/aws-sdk-pandas/3.18.0/pyproject.toml [project] dependencies:
+#   24:    "pandas>=1.2.0,<4.0.0",
+#   25:    "numpy>=1.26,<3.0",
+#   26:    "pyarrow>=8.0.0,<27.0.0",
+# The [tool.uv] overrides (pandas>=3 for Python>=3.11) apply to uv only; the layer is built with pip.
+# uv.lock @3.18.0 (not used for the layer): pandas 3.0.6 / numpy 2.5.4 (+ 2.3.3 / 2.2.6 for older Pythons).
+# NOT VERIFIED: the pandas and numpy versions actually inside the layer (resolved by pip at build time; not documented).

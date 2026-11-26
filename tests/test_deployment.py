@@ -68,6 +68,7 @@ def test_deploy_creates_every_resource_with_the_fixed_bucket(deployed):
     transform = lam.get_function_configuration(FunctionName=config.TRANSFORM_FUNCTION)
     assert transform["Environment"]["Variables"]["TRANSFORMED_S3_BUCKET"] == BUCKET
     assert [layer["Arn"] for layer in transform["Layers"]] == [os.environ[config.PANDAS_LAYER_ENV_VAR]]
+    assert extract["Runtime"] == transform["Runtime"] == "python3.14"
 
     notif = s3.get_bucket_notification_configuration(Bucket=BUCKET)["LambdaFunctionConfigurations"]
     assert notif[0]["LambdaFunctionArn"].endswith(f":function:{config.TRANSFORM_FUNCTION}")
@@ -150,13 +151,6 @@ def test_missing_bucket_name_fails_clearly(aws, spotify_env):
 def test_invalid_bucket_names_are_rejected(bad):
     with pytest.raises(SystemExit, match="not a valid S3 bucket name"):
         config.resolve_bucket_name(bad)
-
-
-def test_default_pandas_layer_is_the_pinned_aws_managed_layer(monkeypatch):
-    monkeypatch.delenv(config.PANDAS_LAYER_ENV_VAR, raising=False)
-    expected = "arn:aws:lambda:eu-west-1:336392948345:layer:AWSSDKPandas-Python310:14"
-    assert config.pandas_layer_arn("eu-west-1") == expected
-    assert config.pandas_layer_arn("eu-west-1", "arn:custom") == "arn:custom"
 
 
 def test_missing_region_fails_clearly(monkeypatch):

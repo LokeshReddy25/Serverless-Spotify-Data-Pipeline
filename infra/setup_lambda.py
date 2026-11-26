@@ -17,7 +17,7 @@ from infra.setup_iam_roles import EXTRACT_ROLE, TRANSFORM_ROLE
 from infra.spotify_credentials import get_spotify_credentials
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-RUNTIME = "python3.10"
+RUNTIME = config.LAMBDA_RUNTIME
 HANDLER = "lambda_function.lambda_handler"
 # A newly created IAM role can take a few seconds before Lambda is allowed to assume it.
 ROLE_PROPAGATION_RETRIES = 6
@@ -110,8 +110,9 @@ def deploy_lambdas(session, bucket, client_id, client_secret, layer_arn=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Deploy the pipeline Lambdas")
     parser.add_argument("--bucket-name", help=f"Bucket name (default: ${config.BUCKET_ENV_VAR})")
-    parser.add_argument("--pandas-layer-arn", help=f"Override the AWS SDK for pandas layer "
-                                                   f"(default: ${config.PANDAS_LAYER_ENV_VAR} or v14)")
+    parser.add_argument("--pandas-layer-arn", help=f"AWS SDK for pandas layer ARN (default: "
+                                                   f"${config.PANDAS_LAYER_ENV_VAR}, else the documented "
+                                                   f"ARN for the region in infra/lambda_layers.py)")
     args = parser.parse_args(argv)
     session = config.get_session()
     bucket = config.resolve_bucket_name(args.bucket_name)
