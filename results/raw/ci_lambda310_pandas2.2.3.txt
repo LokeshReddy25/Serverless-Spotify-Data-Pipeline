@@ -1,0 +1,60 @@
+# CI 'lambda-py310' job commands, run locally on Windows 11 in a venv installed with:
+#   uv pip install -r requirements-lambda310.txt "pandas==2.2.3"
+# 2026-11-26T18:45:18+05:30, commit bd0c8d4 + uncommitted requirements-lambda310.txt
+# python 3.10.22 | pandas 2.2.3 | numpy 1.26.4 | pyarrow 14.0.1 | awswrangler 3.7.2
+$ python -m flake8 .
+flake8_exit=0
+$ python -m pytest --cov --cov-report=term-missing
+============================= test session starts =============================
+platform win32 -- Python 3.10.22, pytest-9.2.0, pluggy-1.7.0
+rootdir: C:\Users\acer\Desktop\Serverless-Spotify-Data-Pipeline
+configfile: setup.cfg
+testpaths: tests
+plugins: cov-7.1.0
+collected 64 items
+
+tests\test_deployment.py .....................                           [ 32%]
+tests\test_extract.py .......                                            [ 43%]
+tests\test_glue_athena.py ........                                       [ 56%]
+tests\test_iam_roles.py .........                                        [ 70%]
+tests\test_release_dates.py ...                                          [ 75%]
+tests\test_secrets_handling.py .......                                   [ 85%]
+tests\test_transform.py .........                                        [100%]
+
+============================== warnings summary ===============================
+tests/test_release_dates.py::test_mixed_precision_release_dates_are_not_lost
+tests/test_release_dates.py::test_invalid_release_dates_become_null_without_affecting_others
+tests/test_release_dates.py::test_no_release_dates_lost_on_synthetic_sample
+tests/test_transform.py::test_transform_writes_three_parquet_tables
+tests/test_transform.py::test_transform_writes_three_parquet_tables
+tests/test_transform.py::test_transform_writes_three_parquet_tables
+  C:\Users\acer\AppData\Local\Temp\claude\ae87c5c792a7d17a\6c59c81b-3566-4fb6-bdd4-68b4eeb293d1\scratchpad\venv310-pandas22\lib\site-packages\pandas\core\frame.py:717: DeprecationWarning: Passing a BlockManager to DataFrame is deprecated and will raise in a future version. Use public APIs instead.
+    warnings.warn(
+
+tests/test_transform.py::test_transform_writes_three_parquet_tables
+  C:\Users\acer\AppData\Local\Temp\claude\ae87c5c792a7d17a\6c59c81b-3566-4fb6-bdd4-68b4eeb293d1\scratchpad\venv310-pandas22\lib\site-packages\pyarrow\pandas_compat.py:722: DeprecationWarning: DatetimeTZBlock is deprecated and will be removed in a future version. Use public APIs instead.
+    klass=_int.DatetimeTZBlock,
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=============================== tests coverage ================================
+______________ coverage: platform win32, python 3.10.22-final-0 _______________
+
+Name                                      Stmts   Miss Branch BrPart  Cover   Missing
+-------------------------------------------------------------------------------------
+deploy_all.py                                32      1      6      1    95%   55
+infra\__init__.py                             0      0      0      0   100%
+infra\config.py                              33      0      6      0   100%
+infra\run_crawler.py                         43      1     12      3    93%   55->exit, 57->exit, 62
+infra\setup_eventbridge.py                   22      8      2      1    62%   20-21, 28-32, 36
+infra\setup_glue_athena.py                   44      6      8      2    85%   52, 83-86, 90
+infra\setup_iam_roles.py                     48      6      8      1    84%   114-118, 122
+infra\setup_lambda.py                        75      7     12      2    90%   40->exit, 81-82, 116-119, 123
+infra\setup_s3.py                            27      7      8      2    74%   29, 38-42, 46
+infra\spotify_credentials.py                 19      0     10      1    97%   29->32
+infra\teardown.py                            96      8     32      3    90%   56, 69, 97-99, 119-120, 152
+src\extract_lambda\lambda_function.py        46      0      2      0   100%
+src\transform_lambda\lambda_function.py      96      3     28      3    95%   36, 52, 81
+-------------------------------------------------------------------------------------
+TOTAL                                       581     47    134     19    90%
+================== 64 passed, 7 warnings in 69.43s (0:01:09) ==================
+pytest_exit=0
