@@ -1,0 +1,120 @@
+$ python -m pytest -p no:warnings -vv tests/test_release_dates.py   # BEFORE fix, src at commit 6960515
+============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-9.2.0, pluggy-1.7.0 -- C:\Users\acer\AppData\Local\Temp\claude\ae87c5c792a7d17a\6c59c81b-3566-4fb6-bdd4-68b4eeb293d1\scratchpad\venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\acer\Desktop\Serverless-Spotify-Data-Pipeline
+configfile: setup.cfg
+plugins: cov-7.1.0
+collecting ... collected 3 items
+
+tests/test_release_dates.py::test_mixed_precision_release_dates_are_not_lost FAILED [ 33%]
+tests/test_release_dates.py::test_invalid_release_dates_become_null_without_affecting_others FAILED [ 66%]
+tests/test_release_dates.py::test_no_release_dates_lost_on_synthetic_sample FAILED [100%]
+
+================================== FAILURES ===================================
+_______________ test_mixed_precision_release_dates_are_not_lost _______________
+tests\test_release_dates.py:44: in test_mixed_precision_release_dates_are_not_lost
+    assert list(albums["album_release_date"]) == ["2019", "2021-05", "2020-03-15", "1999-12-31"]
+E   AssertionError: assert [Timestamp('2019-01-01 00:00:00'), NaT, NaT, NaT] == ['2019', '2021-05', '2020-03-15', '1999-12-31']
+E     
+E     At index 0 diff: Timestamp('2019-01-01 00:00:00') != '2019'
+E     
+E     Full diff: (-: missing in left side, +: extra in left side)
+E       [
+E     -     '2019',
+E     -     '2021-05',
+E     -     '2020-03-15',
+E     -     '1999-12-31',
+E     +     Timestamp('2019-01-01 00:00:00'),
+E     +     NaT,
+E     +     NaT,
+E     +     NaT,
+E       ]
+---------------------------- Captured stdout call -----------------------------
+Processing s3://test-pipeline-bucket/raw_data/to_process/mixed_dates.json
+Successfully processed raw_data/to_process/mixed_dates.json and saved output to transformed_data/
+_______ test_invalid_release_dates_become_null_without_affecting_others _______
+tests\test_release_dates.py:56: in test_invalid_release_dates_become_null_without_affecting_others
+    assert list(albums["album_release_date"]) == ["0000", "not-a-date", "2020-02-30", "2018-07-04"]
+E   AssertionError: assert [Timestamp('1753-08-29 22:43:41.128654848'), NaT, NaT, Timestamp('2018-07-04 00:00:00')] == ['0000', 'not-a-date', '2020-02-30', '2018-07-04']
+E     
+E     At index 0 diff: Timestamp('1753-08-29 22:43:41.128654848') != '0000'
+E     
+E     Full diff: (-: missing in left side, +: extra in left side)
+E       [
+E     -     '0000',
+E     -     'not-a-date',
+E     -     '2020-02-30',
+E     -     '2018-07-04',
+E     +     Timestamp('1753-08-29 22:43:41.128654848'),
+E     +     NaT,
+E     +     NaT,
+E     +     Timestamp('2018-07-04 00:00:00'),
+E       ]
+---------------------------- Captured stdout call -----------------------------
+Processing s3://test-pipeline-bucket/raw_data/to_process/mixed_dates.json
+Successfully processed raw_data/to_process/mixed_dates.json and saved output to transformed_data/
+---------------------------- Captured stderr call -----------------------------
+C:\Users\acer\Desktop\Serverless-Spotify-Data-Pipeline\src\transform_lambda\lambda_function.py:86: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.
+  album_df['album_release_date'] = pd.to_datetime(album_df['album_release_date'], errors='coerce')
+_______________ test_no_release_dates_lost_on_synthetic_sample ________________
+..\..\AppData\Local\Temp\claude\ae87c5c792a7d17a\6c59c81b-3566-4fb6-bdd4-68b4eeb293d1\scratchpad\venv\Lib\site-packages\pandas\core\indexes\base.py:3816: in get_loc
+    return self._engine.get_loc(casted_key)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+pandas/_libs/index.pyx:172: in pandas._libs.index.IndexEngine.get_loc
+    ???
+pandas/_libs/index.pyx:201: in pandas._libs.index.IndexEngine.get_loc
+    ???
+pandas/_libs/hashtable_class_helper.pxi:7726: in pandas._libs.hashtable.PyObjectHashTable.get_item
+    ???
+pandas/_libs/hashtable_class_helper.pxi:7734: in pandas._libs.hashtable.PyObjectHashTable.get_item
+    ???
+E   KeyError: 'album_release_date_parsed'
+
+The above exception was the direct cause of the following exception:
+tests\test_release_dates.py:68: in test_no_release_dates_lost_on_synthetic_sample
+    assert albums["album_release_date_parsed"].notna().sum() == 40
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\..\AppData\Local\Temp\claude\ae87c5c792a7d17a\6c59c81b-3566-4fb6-bdd4-68b4eeb293d1\scratchpad\venv\Lib\site-packages\pandas\core\frame.py:4330: in __getitem__
+    indexer = self.columns.get_loc(key)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+..\..\AppData\Local\Temp\claude\ae87c5c792a7d17a\6c59c81b-3566-4fb6-bdd4-68b4eeb293d1\scratchpad\venv\Lib\site-packages\pandas\core\indexes\base.py:3823: in get_loc
+    raise KeyError(key) from err
+E   KeyError: 'album_release_date_parsed'
+---------------------------- Captured stdout call -----------------------------
+Processing s3://test-pipeline-bucket/raw_data/to_process/mixed_dates.json
+Successfully processed raw_data/to_process/mixed_dates.json and saved output to transformed_data/
+=========================== short test summary info ===========================
+FAILED tests/test_release_dates.py::test_mixed_precision_release_dates_are_not_lost - AssertionError: assert [Timestamp('2019-01-01 00:00:00'), NaT, NaT, NaT] == ['2019', '2021-05', '2020-03-15', '1999-12-31']
+  
+  At index 0 diff: Timestamp('2019-01-01 00:00:00') != '2019'
+  
+  Full diff: (-: missing in left side, +: extra in left side)
+    [
+  -     '2019',
+  -     '2021-05',
+  -     '2020-03-15',
+  -     '1999-12-31',
+  +     Timestamp('2019-01-01 00:00:00'),
+  +     NaT,
+  +     NaT,
+  +     NaT,
+    ]
+FAILED tests/test_release_dates.py::test_invalid_release_dates_become_null_without_affecting_others - AssertionError: assert [Timestamp('1753-08-29 22:43:41.128654848'), NaT, NaT, Timestamp('2018-07-04 00:00:00')] == ['0000', 'not-a-date', '2020-02-30', '2018-07-04']
+  
+  At index 0 diff: Timestamp('1753-08-29 22:43:41.128654848') != '0000'
+  
+  Full diff: (-: missing in left side, +: extra in left side)
+    [
+  -     '0000',
+  -     'not-a-date',
+  -     '2020-02-30',
+  -     '2018-07-04',
+  +     Timestamp('1753-08-29 22:43:41.128654848'),
+  +     NaT,
+  +     NaT,
+  +     Timestamp('2018-07-04 00:00:00'),
+    ]
+FAILED tests/test_release_dates.py::test_no_release_dates_lost_on_synthetic_sample - KeyError: 'album_release_date_parsed'
+============================== 3 failed in 2.51s ==============================
+exit=1

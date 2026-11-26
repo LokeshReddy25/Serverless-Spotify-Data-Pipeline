@@ -1,4 +1,5 @@
 import json
+import re
 import boto3
 import pandas as pd
 import awswrangler as wr
@@ -8,6 +9,36 @@ from datetime import datetime
 
 s3_client = boto3.client('s3')
 
+# Spotify gives album.release_date at one of three precisions. Each is parsed with its own
+# format, so one precision can never cause values of another precision to be dropped.
+_RELEASE_DATE_FORMATS = (
+    ('day', re.compile(r'\d{4}-\d{2}-\d{2}'), '%Y-%m-%d'),
+    ('month', re.compile(r'\d{4}-\d{2}'), '%Y-%m'),
+    ('year', re.compile(r'\d{4}'), '%Y'),
+)
+
+ALBUM_COLUMNS = ['album_id', 'album_name', 'album_release_date', 'album_release_date_precision',
+                 'album_release_date_parsed', 'album_total_tracks', 'album_url']
+
+
+def parse_release_date(value):
+    """Parse a Spotify release date ("YYYY", "YYYY-MM" or "YYYY-MM-DD").
+
+    Returns (date, precision). Year and month precision are anchored to the first day of
+    that period. Values that don't match, or aren't real dates (e.g. "0000"), return (None, None).
+    """
+    if not isinstance(value, str):
+        return None, None
+    value = value.strip()
+    for precision, pattern, fmt in _RELEASE_DATE_FORMATS:
+        if pattern.fullmatch(value):
+            try:
+                return datetime.strptime(value, fmt), precision
+            except ValueError:
+                return None, None
+    return None, None
+
+
 def process_album(items):
     album_list = []
     for row in items:
@@ -15,15 +46,19 @@ def process_album(items):
         if not track:
             continue
         album = track.get('album', {})
+        raw_release_date = album.get('release_date')
+        parsed_release_date, precision = parse_release_date(raw_release_date)
         album_element = {
             'album_id': album.get('id'),
             'album_name': album.get('name'),
-            'album_release_date': album.get('release_date'),
+            'album_release_date': raw_release_date,  # raw Spotify string, kept unchanged
+            'album_release_date_precision': precision,
+            'album_release_date_parsed': parsed_release_date,
             'album_total_tracks': album.get('total_tracks'),
             'album_url': album.get('external_urls', {}).get('spotify')
         }
         album_list.append(album_element)
-    return pd.DataFrame(album_list).drop_duplicates(subset=['album_id'])
+    return pd.DataFrame(album_list, columns=ALBUM_COLUMNS).drop_duplicates(subset=['album_id'])
 
 def process_artist(items):
     artist_list = []
@@ -83,7 +118,8 @@ def lambda_handler(event, context):
         track_df = process_track(items)
         
         # Force column types to handle potential nulls gracefully during write
-        album_df['album_release_date'] = pd.to_datetime(album_df['album_release_date'], errors='coerce')
+        # album_release_date stays a string; the parsed column already holds datetime objects or None.
+        album_df['album_release_date_parsed'] = pd.to_datetime(album_df['album_release_date_parsed'])
         track_df['added_at'] = pd.to_datetime(track_df['added_at'], errors='coerce')
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
