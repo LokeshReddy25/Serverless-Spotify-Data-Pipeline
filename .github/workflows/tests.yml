@@ -24,17 +24,17 @@ jobs:
             python: "3.11"
             requirements: requirements-dev.txt
             pandas: ""
-          # Python 3.10 + the versions verified for Lambda layer AWSSDKPandas-Python310:14
-          # (awswrangler 3.7.2, pyarrow 14.0.1). The layer's pandas version is NOT documented,
-          # so two pandas versions are tested; see requirements-lambda310.txt.
-          - name: py3.10 layer pins, pandas 2.1.4
-            python: "3.10"
-            requirements: requirements-lambda310.txt
-            pandas: "pandas==2.1.4"
-          - name: py3.10 layer pins, pandas 2.2.3
-            python: "3.10"
-            requirements: requirements-lambda310.txt
-            pandas: "pandas==2.2.3"
+          # Python 3.14 (the Lambda runtime) + the versions verified for the AWS SDK for pandas 3.18.0
+          # layer AWSSDKPandas-Python314 (awswrangler 3.18.0, pyarrow 24.0.0). The layer's pandas
+          # version is NOT documented, so two pandas versions are tested; see requirements-lambda314.txt.
+          - name: py3.14 layer pins, pandas 3.0.6
+            python: "3.14"
+            requirements: requirements-lambda314.txt
+            pandas: "pandas==3.0.6"
+          - name: py3.14 layer pins, pandas 3.1.1
+            python: "3.14"
+            requirements: requirements-lambda314.txt
+            pandas: "pandas==3.1.1"
     steps:
       - uses: actions/checkout@v4
 

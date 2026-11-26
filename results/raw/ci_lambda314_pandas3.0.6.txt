@@ -1,0 +1,47 @@
+# CI 'py3.14 layer pins' commands, run locally on Windows 11 in a venv installed with:
+#   uv pip install -r requirements-lambda314.txt "pandas==3.0.6"
+# 2026-11-26T19:41:53+05:30, commit 4731ed0 + uncommitted CI/requirements changes
+# python 3.14.10 | pandas 3.0.6 | numpy 2.5.4 | pyarrow 24.0.0 | awswrangler 3.18.0
+$ python -m flake8 .
+flake8_exit=0
+$ python -m pytest --cov --cov-report=term-missing
+============================= test session starts =============================
+platform win32 -- Python 3.14.10, pytest-9.2.0, pluggy-1.7.0
+rootdir: C:\Users\acer\Desktop\Serverless-Spotify-Data-Pipeline
+configfile: setup.cfg
+testpaths: tests
+plugins: cov-7.1.0
+collected 81 items
+
+tests\test_deployment.py ....................                            [ 24%]
+tests\test_extract.py .......                                            [ 33%]
+tests\test_glue_athena.py ........                                       [ 43%]
+tests\test_iam_roles.py .........                                        [ 54%]
+tests\test_lambda_layers.py ..................                           [ 76%]
+tests\test_release_dates.py ...                                          [ 80%]
+tests\test_secrets_handling.py .......                                   [ 88%]
+tests\test_transform.py .........                                        [100%]
+
+=============================== tests coverage ================================
+______________ coverage: platform win32, python 3.14.10-final-0 _______________
+
+Name                                      Stmts   Miss Branch BrPart  Cover   Missing
+-------------------------------------------------------------------------------------
+deploy_all.py                                32      1      6      1    95%   56
+infra\__init__.py                             0      0      0      0   100%
+infra\config.py                              49      0     16      0   100%
+infra\lambda_layers.py                        6      0      0      0   100%
+infra\run_crawler.py                         43      1     12      3    93%   55->exit, 57->exit, 62
+infra\setup_eventbridge.py                   22      8      2      1    62%   20-21, 28-32, 36
+infra\setup_glue_athena.py                   44      6      8      2    85%   52, 83-86, 90
+infra\setup_iam_roles.py                     48      6      8      1    84%   114-118, 122
+infra\setup_lambda.py                        75      7     12      2    90%   40->exit, 81-82, 117-120, 124
+infra\setup_s3.py                            27      7      8      2    74%   29, 38-42, 46
+infra\spotify_credentials.py                 19      0     10      1    97%   29->32
+infra\teardown.py                            96      8     32      3    90%   56, 69, 97-99, 119-120, 152
+src\extract_lambda\lambda_function.py        46      0      2      0   100%
+src\transform_lambda\lambda_function.py      96      3     28      3    95%   36, 52, 81
+-------------------------------------------------------------------------------------
+TOTAL                                       603     47    144     19    91%
+======================= 81 passed in 102.54s (0:01:42) ========================
+pytest_exit=0
