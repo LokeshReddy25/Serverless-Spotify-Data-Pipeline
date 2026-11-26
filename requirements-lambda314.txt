@@ -1,0 +1,25 @@
+# Test and lint dependencies matching the Lambda environment the code deploys:
+#   runtime python3.14 + AWS SDK for pandas 3.18.0 layer AWSSDKPandas-Python314 (x86_64)
+#   (per-region ARNs: infra/lambda_layers.py)
+#
+# Install with an explicit pandas pin, as the CI matrix does:
+#   pip install -r requirements-lambda314.txt "pandas==3.0.6"
+#   pip install -r requirements-lambda314.txt "pandas==3.1.1"
+#
+# Verified from official aws-sdk-pandas sources at tag 3.18.0 (results/raw/lambda_runtime_and_layer_py314.txt):
+#   - awswrangler 3.18.0 is the release that publishes the AWSSDKPandas-Python314 ARNs used here.
+#   - pyarrow 24.0.0: building/lambda/build-lambda-layer.sh builds pyarrow 24.0.0 and puts that build in the layer.
+# NOT verified:
+#   - The layer's pandas and numpy versions. The layer is built with `pip install .`, which resolves
+#     pandas >=1.2.0,<4.0.0 and numpy >=1.26,<3.0 on the build date; the result is not documented.
+#     CI therefore tests pandas 3.0.6 with numpy 2.5.4 (the versions in aws-sdk-pandas' uv.lock at 3.18.0,
+#     which the layer build does not use) and pandas 3.1.1 (newest).
+#   - boto3/botocore: the layer build removes them, so the Lambda runtime's own copies are used.
+awswrangler==3.18.0
+pyarrow==24.0.0
+numpy==2.5.4
+boto3==1.44.12
+moto[s3,iam,awslambda,events,glue,athena,logs,sts]==5.2.6
+pytest==9.2.0
+pytest-cov==7.1.0
+flake8==7.5.0

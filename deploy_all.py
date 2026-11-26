@@ -22,7 +22,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Deploy the Spotify pipeline")
     parser.add_argument("--bucket-name", help=f"Fixed bucket name (default: ${config.BUCKET_ENV_VAR})")
     parser.add_argument("--schedule", default=config.DEFAULT_SCHEDULE, help="EventBridge schedule expression")
-    parser.add_argument("--pandas-layer-arn", help="Override the AWS SDK for pandas Lambda layer ARN")
+    parser.add_argument("--pandas-layer-arn", help="AWS SDK for pandas layer ARN (default: $PANDAS_LAYER_ARN, "
+                        "else the documented ARN for the region in infra/lambda_layers.py)")
     parser.add_argument("--run-crawler", action="store_true",
                         help="Start the Glue crawler at the end (useful on redeploys, once data exists)")
     args = parser.parse_args(argv)
