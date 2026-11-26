@@ -40,7 +40,7 @@ Lambda duration, memory and cold start on AWS · whether the layer ARNs resolve 
 
 1. Decide whether you ran the Glue crawler and Athena queries in the old account. Only claim them if you did.
 2. Confirm whether real Spotify data ever flowed. Your Spotify app may also be unable to read the default editorial playlist.
-3. To get AWS numbers, deploy to a non-production account (`python deploy_all.py`), run it, save CloudWatch `REPORT` lines, the crawler output, an Athena query's "data scanned" figure and billing to `results/`, then run `python -m infra.teardown --yes`.
+3. To get AWS numbers, deploy to a non-production account with `python deploy_all.py --bucket-name NAME` (or set the `SPOTIFY_PIPELINE_BUCKET` environment variable instead of passing `--bucket-name`; `deploy_all.py` stops with an error if neither is given). Run the pipeline, save CloudWatch `REPORT` lines, the crawler output, an Athena query's "data scanned" figure and billing to `results/`, then remove everything with `python -m infra.teardown --bucket-name NAME --yes` (teardown needs the same bucket name, from `--bucket-name` or `SPOTIFY_PIPELINE_BUCKET`).
 4. Still open in code: Spotify secret in Secrets Manager; transform Lambda memory size; crawler schedule.
 5. Update your resume using the suggested wording in `results/resume_claims_check.md`.
 
