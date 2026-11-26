@@ -4,7 +4,7 @@ import io
 import pytest
 
 import deploy_all
-from infra import spotify_credentials
+from infra import setup_lambda, spotify_credentials
 
 SECRET = "not-a-real-secret-value"
 
@@ -47,29 +47,13 @@ def test_empty_prompt_answers_are_rejected(monkeypatch):
         spotify_credentials.get_spotify_credentials(FakeStdin(tty=True))
 
 
-def test_deploy_all_never_puts_secret_on_command_line(monkeypatch, capsys):
-    monkeypatch.setenv("SPOTIFY_CLIENT_ID", "the-id")
-    monkeypatch.setenv("SPOTIFY_CLIENT_SECRET", SECRET)
-    calls = []
-
-    class Done:
-        returncode, stdout, stderr = 0, "", ""
-
-    def fake_run(cmd, **kwargs):
-        calls.append((cmd, kwargs["env"]))
-        return Done()
-
-    monkeypatch.setattr(deploy_all.subprocess, "run", fake_run)
-    deploy_all.main()
-
-    assert calls, "no deployment steps ran"
-    for cmd, env in calls:
-        assert not any(SECRET in part for part in cmd)
-        assert env["SPOTIFY_CLIENT_SECRET"] == SECRET  # passed via environment instead
-    captured = capsys.readouterr()
-    assert SECRET not in captured.out + captured.err
+@pytest.mark.parametrize("main", [deploy_all.main, setup_lambda.main])
+def test_scripts_reject_secret_command_line_arguments(main, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["--bucket-name", "b", "--client-secret", SECRET])
+    assert exc.value.code == 2  # argparse: unrecognized argument
 
 
 def test_deploy_all_does_not_read_credentials_json():
     source = open(deploy_all.__file__, encoding="utf-8").read()
-    assert "credentials.json" not in source
+    assert "open(" not in source and "subprocess" not in source

@@ -1,56 +1,36 @@
-import boto3
+"""Schedule the extract Lambda with an EventBridge rule (default: daily at 12:00 UTC).
+
+Usage: python -m infra.setup_eventbridge [--schedule "cron(0 12 * * ? *)"]
+"""
 import argparse
 
-events_client = boto3.client('events')
-lambda_client = boto3.client('lambda')
+from infra import config
 
-def setup_eventbridge_trigger(lambda_name, cron_schedule="cron(0 12 * * ? *)"):
-    """Creates a CloudWatch Event Rule to trigger the lambda daily at noon UTC by default"""
-    
-    # 1. Get Lambda ARN
-    lambda_response = lambda_client.get_function(FunctionName=lambda_name)
-    lambda_arn = lambda_response['Configuration']['FunctionArn']
+STATEMENT_ID = "eventbridge-invoke-permission"
 
-    rule_name = "SpotifyDailyExtractionRule"
-    
-    # 2. Put Rule
-    print(f"🚀 Creating EventBridge Rule: {rule_name} with schedule: {cron_schedule}")
-    rule_response = events_client.put_rule(
-        Name=rule_name,
-        ScheduleExpression=cron_schedule,
-        State='ENABLED',
-        Description='Triggers Spotify extraction daily'
-    )
-    rule_arn = rule_response['RuleArn']
 
-    # 3. Add permission for EventBridge to invoke Lambda
+def setup_schedule(events, lam, schedule=config.DEFAULT_SCHEDULE, function_name=config.EXTRACT_FUNCTION):
+    function_arn = lam.get_function(FunctionName=function_name)["Configuration"]["FunctionArn"]
+    rule_arn = events.put_rule(Name=config.SCHEDULE_RULE, ScheduleExpression=schedule, State="ENABLED",
+                               Description="Triggers Spotify extraction daily")["RuleArn"]
+    print(f"EventBridge rule {config.SCHEDULE_RULE}: {schedule}")
     try:
-        lambda_client.add_permission(
-            FunctionName=lambda_name,
-            StatementId='eventbridge-invoke-permission',
-            Action='lambda:InvokeFunction',
-            Principal='events.amazonaws.com',
-            SourceArn=rule_arn
-        )
-        print("  └── Added permission to invoke Lambda")
-    except lambda_client.exceptions.ResourceConflictException:
-        print("  └── Permission already exists")
+        lam.add_permission(FunctionName=function_name, StatementId=STATEMENT_ID,
+                           Action="lambda:InvokeFunction", Principal="events.amazonaws.com", SourceArn=rule_arn)
+    except lam.exceptions.ResourceConflictException:
+        pass  # permission already present
+    events.put_targets(Rule=config.SCHEDULE_RULE, Targets=[{"Id": "1", "Arn": function_arn}])
+    print(f"  Target: {function_name}")
+    return rule_arn
 
-    # 4. Put Target
-    events_client.put_targets(
-        Rule=rule_name,
-        Targets=[
-            {
-                'Id': '1',
-                'Arn': lambda_arn
-            }
-        ]
-    )
-    print(f"✅ Successfully attached target Lambda ({lambda_name}) to rule ({rule_name})")
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--schedule', default='cron(0 12 * * ? *)', help="Cron expression for the schedule")
-    args = parser.parse_args()
-    
-    setup_eventbridge_trigger("SpotifyExtractData", args.schedule)
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Schedule the extract Lambda")
+    parser.add_argument("--schedule", default=config.DEFAULT_SCHEDULE, help="EventBridge schedule expression")
+    args = parser.parse_args(argv)
+    session = config.get_session()
+    setup_schedule(session.client("events"), session.client("lambda"), args.schedule)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,58 +1,44 @@
-import boto3
+"""Create the Glue database and the crawler over transformed_data/.
+
+Usage: python -m infra.setup_glue_athena --bucket-name NAME
+"""
 import argparse
 
-glue_client = boto3.client('glue')
-iam_client = boto3.client('iam')
-athena_client = boto3.client('athena')
+from infra import config
+from infra.setup_iam_roles import GLUE_ROLE
 
-def setup_glue_crawler(bucket_name, database_name="spotify_db", crawler_name="spotify_data_crawler"):
-    print("🚀 Setting up Glue and Athena...")
-    
-    # 1. Create Glue Database
+
+def setup_glue(glue, iam, bucket):
     try:
-        glue_client.create_database(
-            DatabaseInput={
-                'Name': database_name,
-                'Description': 'Database for Spotify Analytics Pipeline'
-            }
-        )
-        print(f"✅ Created Glue Database: {database_name}")
-    except glue_client.exceptions.AlreadyExistsException:
-        print(f"  └── Database {database_name} already exists.")
+        glue.create_database(DatabaseInput={"Name": config.GLUE_DATABASE,
+                                            "Description": "Database for Spotify Analytics Pipeline"})
+        print(f"Created Glue database: {config.GLUE_DATABASE}")
+    except glue.exceptions.AlreadyExistsException:
+        print(f"Glue database {config.GLUE_DATABASE} already exists.")
 
-    # 2. Glue crawler role (created and scoped to the bucket by setup_iam_roles.py)
-    role_arn = iam_client.get_role(RoleName="SpotifyGlueCrawlerRole")['Role']['Arn']
-
-    # 3. Create Glue Crawler
-    target_path = f"s3://{bucket_name}/transformed_data/"
+    crawler = {
+        "Name": config.GLUE_CRAWLER,
+        "Role": iam.get_role(RoleName=GLUE_ROLE)["Role"]["Arn"],
+        "DatabaseName": config.GLUE_DATABASE,
+        "Targets": {"S3Targets": [{"Path": f"s3://{bucket}/{config.TRANSFORMED_PREFIX}"}]},
+        "SchemaChangePolicy": {"UpdateBehavior": "UPDATE_IN_DATABASE", "DeleteBehavior": "DEPRECATE_IN_DATABASE"},
+        "RecrawlPolicy": {"RecrawlBehavior": "CRAWL_EVERYTHING"},
+    }
     try:
-        glue_client.create_crawler(
-            Name=crawler_name,
-            Role=role_arn,
-            DatabaseName=database_name,
-            Targets={'S3Targets': [{'Path': target_path}]},
-            SchemaChangePolicy={'UpdateBehavior': 'UPDATE_IN_DATABASE', 'DeleteBehavior': 'DEPRECATE_IN_DATABASE'},
-            RecrawlPolicy={'RecrawlBehavior': 'CRAWL_EVERYTHING'}
-        )
-        print(f"✅ Created Glue Crawler: {crawler_name} pointing to {target_path}")
-    except glue_client.exceptions.AlreadyExistsException:
-        print(f"  └── Crawler {crawler_name} already exists. Updating its target path...")
-        glue_client.update_crawler(
-            Name=crawler_name,
-            Role=role_arn,
-            DatabaseName=database_name,
-            Targets={'S3Targets': [{'Path': target_path}]},
-            SchemaChangePolicy={'UpdateBehavior': 'UPDATE_IN_DATABASE', 'DeleteBehavior': 'DEPRECATE_IN_DATABASE'},
-            RecrawlPolicy={'RecrawlBehavior': 'CRAWL_EVERYTHING'}
-        )
-        print(f"✅ Updated Crawler: {crawler_name} target to {target_path}")
+        glue.create_crawler(**crawler)
+        print(f"Created Glue crawler: {config.GLUE_CRAWLER}")
+    except glue.exceptions.AlreadyExistsException:
+        glue.update_crawler(**crawler)
+        print(f"Updated Glue crawler: {config.GLUE_CRAWLER}")
 
-    print(f"\n✅ You can now run the crawler from the AWS Console to catalog the parquet files.")
-    print("Tip: Run it after executing the Extract & Transform Lambdas at least once.")
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--bucket-name', required=True)
-    args = parser.parse_args()
-    
-    setup_glue_crawler(args.bucket_name)
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Create the Glue database and crawler")
+    parser.add_argument("--bucket-name", help=f"Bucket name (default: ${config.BUCKET_ENV_VAR})")
+    args = parser.parse_args(argv)
+    session = config.get_session()
+    setup_glue(session.client("glue"), session.client("iam"), config.resolve_bucket_name(args.bucket_name))
+
+
+if __name__ == "__main__":
+    main()
