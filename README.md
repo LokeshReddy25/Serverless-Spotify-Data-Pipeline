@@ -55,14 +55,15 @@ Spotify gives `album.release_date` as `YYYY`, `YYYY-MM` or `YYYY-MM-DD`. The alb
 ├── tests/                      # pytest + moto (no AWS, no Spotify calls)
 ├── benchmarks/                 # Local-only measurement scripts
 ├── results/                    # Measured results, resume-claims check, raw logs
-├── requirements-dev.txt        # Test and lint dependencies
+├── requirements-dev.txt        # Test and lint dependencies (Python 3.11)
+├── requirements-lambda310.txt  # Python 3.10 pins matching the Lambda layer (see CI matrix)
 └── .github/workflows/tests.yml # CI: flake8 + pytest on every push and pull request
 ```
 
 ## Setup and deployment
 
 ### Prerequisites
-- Python 3 with `boto3` to run the deploy scripts. The test suite was run on Python 3.11.9 only; the Lambda functions use the `python3.10` runtime.
+- Python 3 with `boto3` to run the deploy scripts. The test suite has been run on Python 3.11.9 and 3.10.22; the Lambda functions use the `python3.10` runtime (see [Known limitations](#known-limitations) for its support status).
 - AWS credentials from the standard chain: an AWS CLI profile (`AWS_PROFILE`), SSO, or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in the environment. **No credentials file is read from this repository.**
 - An AWS region set (`AWS_REGION`/`AWS_DEFAULT_REGION` or in the profile). The scripts stop with an error if none is set.
 - A Spotify Developer app (client ID and secret). **Note:** since 27 Nov 2024, Spotify no longer serves Spotify-owned editorial playlists (which include Top 50 Global) to new apps or to development-mode apps without an approved extension ([Spotify announcement](https://developer.spotify.com/blog/2024-11-27-changes-to-the-web-api)). You may need to set `SPOTIFY_PLAYLIST_ID` on the extract Lambda to a playlist your app can read.
@@ -157,7 +158,31 @@ Lowest coverage: `infra/setup_eventbridge.py` at 62%. Its "permission already ex
 
 **All tests use moto, not real AWS.** The Spotify API is stubbed. moto stores IAM policies but does not enforce them, and moto has not implemented `glue.update_crawler` or `athena.update_work_group`, so those two update paths are tested by recording the calls rather than executing them.
 
-`.github/workflows/tests.yml` runs the same flake8 and pytest commands on every push and pull request, using `requirements-dev.txt`, with no AWS credentials or repository secrets. The same commands pass locally (see above), but the workflow itself has not yet been run on GitHub.
+### CI matrix and the Lambda Python version
+
+`.github/workflows/tests.yml` runs flake8 and pytest on every push and pull request, with no AWS credentials or repository secrets, in three matrix entries:
+
+| Entry | Python | Dependencies |
+|---|---|---|
+| `py3.11 dev pins` | 3.11 | `requirements-dev.txt` (pandas 3.1.1, pyarrow 26.0.1, awswrangler 3.18.0) |
+| `py3.10 layer pins, pandas 2.1.4` | 3.10 | `requirements-lambda310.txt` + `pandas==2.1.4` |
+| `py3.10 layer pins, pandas 2.2.3` | 3.10 | `requirements-lambda310.txt` + `pandas==2.2.3` |
+
+The 3.10 entries exist because the Lambda functions use the `python3.10` runtime with layer `AWSSDKPandas-Python310:14`, while the 3.11 entry uses newer libraries than that layer contains. What the official AWS SDK for pandas sources (tag `3.7.2` of [aws/aws-sdk-pandas](https://github.com/aws/aws-sdk-pandas)) do and don't establish:
+
+- **Verified:** in `us-east-1`, `ap-south-1` and 20 other regions, layer version 14 is AWS SDK for pandas **3.7.2** (`docs/source/layers.rst`). The same version number is a different release elsewhere: 3.6.0 in `ap-south-2`; 3.7.3 in `ap-southeast-4`, `eu-central-2`, `eu-south-2` and `me-central-1`; 3.9.1 in `cn-northwest-1`.
+- **Verified:** the 3.7.2 layer contains **pyarrow 14.0.1** (`building/lambda/build-lambda-layer.sh` builds pyarrow from the `apache-arrow-14.0.1` tag and puts that build in the layer).
+- **Not verified:** the layer's **pandas and numpy** versions. The layer is built with `pip install .`, which resolves `pandas >=1.2.0,<3.0.0` and `numpy ^1.18` on the build date, and the result isn't documented. CI therefore tests two pandas versions: 2.1.4 with numpy 1.26.4 (the versions in aws-sdk-pandas' `poetry.lock` at 3.7.2, which the layer build does not use) and 2.2.3 (the newest 2.2.x).
+- `requirements-lambda310.txt` pins flake8 7.4.1, because 7.5.0 requires Python 3.11+.
+
+Local runs on 2026-11-26 (Windows 11, Python 3.10.22 installed with `uv`):
+
+| Environment | flake8 | Tests | Coverage | Raw output |
+|---|---|---|---|---|
+| Python 3.10.22, pandas 2.1.4, numpy 1.26.4, pyarrow 14.0.1, awswrangler 3.7.2 | clean | 64 passed (including all 3 date-fix tests) | 90% | [results/raw/ci_lambda310_pandas2.1.4.txt](results/raw/ci_lambda310_pandas2.1.4.txt) |
+| Python 3.10.22, pandas 2.2.3, numpy 1.26.4, pyarrow 14.0.1, awswrangler 3.7.2 | clean | 64 passed (including all 3 date-fix tests); 7 DeprecationWarnings from pandas/pyarrow internals | 90% | [results/raw/ci_lambda310_pandas2.2.3.txt](results/raw/ci_lambda310_pandas2.2.3.txt) |
+
+The `py3.11 dev pins` entry ran on GitHub for pull request #2, and its checks were reported as passed there. The two 3.10 entries have only been run locally on Windows, not yet on GitHub's Linux runner. A wheels-only resolve of their pins for Linux x86_64 succeeded.
 
 ## Results
 
@@ -175,11 +200,11 @@ A check of the resume claims against the original code is in [results/resume_cla
 
 ## Known limitations
 
-Status as of the `fix/pipeline-hardening` branch. "Fixed" means fixed in code and covered by moto tests; **none of the fixes have been run on real AWS.**
+"Fixed" means fixed in code and covered by moto tests; **none of the fixes have been run on real AWS or in the AWS Lambda environment.**
 
 | Limitation | Status |
 |---|---|
-| Mixed `YYYY` / `YYYY-MM` / `YYYY-MM-DD` release dates were turned into nulls (36 of 40 in the synthetic test, reproduced on pandas 3.1.1), and `0000` became a wrong 1753 timestamp | **Fixed.** Each precision is parsed with its own format; regression tests in `tests/test_release_dates.py` failed before the fix and pass after it (`results/raw/date_bug_{before,after}_fix.txt`). Verified on pandas 3.1.1 only; the Lambda layer's pandas version is untested. |
+| Mixed `YYYY` / `YYYY-MM` / `YYYY-MM-DD` release dates were turned into nulls (36 of 40 in the synthetic test, reproduced on pandas 3.1.1), and `0000` became a wrong 1753 timestamp | **Fixed.** Each precision is parsed with its own format; regression tests in `tests/test_release_dates.py` failed before the fix and pass after it (`results/raw/date_bug_{before,after}_fix.txt`). The tests pass locally on Python 3.11 with pandas 3.1.1, and on Python 3.10 with pandas 2.1.4 and 2.2.3 (with awswrangler 3.7.2 and pyarrow 14.0.1). **Not verified:** the pandas version actually in the Lambda layer, which isn't documented, and the fix inside the AWS Lambda environment itself. |
 | Handlers returned a 500 body instead of failing, so Lambda counted errors as successes | **Fixed.** Both handlers log and re-raise. |
 | The Glue crawler was never started by the code | **Fixed** with a one-command step (`python -m infra.run_crawler --wait`, or `deploy_all.py --run-crawler`). **Still open:** the crawler has no schedule. |
 | No Athena setup | **Fixed.** Workgroup `spotify_workgroup` with a result location and a 1 GiB per-query limit. |
@@ -192,11 +217,14 @@ Status as of the `fix/pipeline-hardening` branch. "Fixed" means fixed in code an
 | If a Parquet write fails part-way, the retry writes the earlier tables again, so duplicates are possible | **Still open.** The raw file is kept for retry, but writes aren't atomic across the three tables. |
 | Each daily run adds new Parquet files, so a track still in the playlist appears once per day in Athena | **Still open, by design.** Use `DISTINCT` or filter by file date. |
 | The playlist request fetches only the first page (up to 100 tracks) | **Still open.** Enough for a 50-track playlist. |
+| CI tested only Python 3.11 with pandas 3.1.1, while the Lambda uses `python3.10` with layer `AWSSDKPandas-Python310:14` | **Partly addressed.** CI adds Python 3.10 entries pinned to the layer's verified awswrangler 3.7.2 and pyarrow 14.0.1, with pandas 2.1.4 and 2.2.3; they pass locally (see [CI matrix](#ci-matrix-and-the-lambda-python-version)). **Not verified:** the layer's pandas/numpy versions, the boto3 version in the Lambda runtime, Linux CI runs of the 3.10 entries, and anything inside the AWS Lambda environment. |
+| Layer version `AWSSDKPandas-Python310:14` is a different AWS SDK for pandas release in different regions (3.7.2 in 22 regions; 3.6.0, 3.7.3 or 3.9.1 in six others) | **Still open.** CI matches the 3.7.2 build. In other regions, pass a matching layer with `--pandas-layer-arn`. |
+| The `python3.10` runtime: the AWS Lambda Developer Guide's [runtime deprecation page](https://docs.aws.amazon.com/lambda/latest/dg/runtime-support-policy.html) lists it under "The following runtimes have reached end of support", with deprecation date Oct 31, 2026, block function create Jul 29, 2027 and block function update Aug 31, 2027 (page read on 2026-11-26) | **Still open.** Moving to a newer Python runtime and its matching layer hasn't been done or tested. |
 
 ## What is and isn't verified
 
-- **Verified locally (moto):** both handlers, including error paths; the date fix; deploy creating every resource with the fixed bucket name; redeploy updating in place; teardown removing everything deploy created; the IAM policy documents that get attached; the Athena workgroup settings; the crawler step.
-- **Not verified:** anything on real AWS (IAM sufficiency, the Lambda layer, S3 → Lambda notifications, EventBridge invocations, crawler output, Athena queries); the Spotify API with real credentials; the GitHub Actions workflow on GitHub.
+- **Verified locally (moto), on Python 3.11 with the dev pins and on Python 3.10 with the layer's awswrangler and pyarrow versions plus pandas 2.1.4 and 2.2.3:** both handlers, including error paths; the date fix; deploy creating every resource with the fixed bucket name; redeploy updating in place; teardown removing everything deploy created; the IAM policy documents that get attached; the Athena workgroup settings; the crawler step.
+- **Not verified:** anything on real AWS or inside the AWS Lambda environment (IAM sufficiency, the layer's actual contents beyond the documented awswrangler and pyarrow versions, S3 → Lambda notifications, EventBridge invocations, crawler output, Athena queries); the Spotify API with real credentials; the Python 3.10 CI entries on GitHub.
 
 ## Analytics example
 
