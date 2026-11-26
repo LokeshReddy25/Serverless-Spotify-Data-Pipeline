@@ -22,7 +22,7 @@ Details: [results/results.md](results/results.md) · Claims check: [results/resu
 |---|---|---|
 | 1. Lambda extracts Spotify data → raw JSON in S3 | SUPPORTED (code only) | **SUPPORTED** (verified locally). "Trending" still overstates it. |
 | 2. Parquet via Data Wrangler; Glue schema discovery; Athena SQL | PARTIAL | **PARTIAL.** Parquet: supported. Glue crawler and Athena workgroup are now set up by code and verified in moto, but no crawl or query has ever run. |
-| 3. Daily automation + Boto3/IAM infrastructure, repeatable deployment | PARTIAL | **SUPPORTED** (verified locally with moto). Fixed bucket name, redeploy in place, teardown, scoped IAM. Not deployed to AWS; IAM sufficiency untested. |
+| 3. Daily automation + Boto3/IAM infrastructure, repeatable deployment | PARTIAL | **SUPPORTED in code (verified in moto only; never deployed to AWS).** Fixed bucket name, redeploy in place, teardown, scoped IAM. IAM sufficiency untested. "Full pipeline" includes the Glue crawler and Athena steps, which have never run: no crawl has produced tables and no Athena query has been executed (see Claim 2). |
 
 ### What was merged since the first measurement
 

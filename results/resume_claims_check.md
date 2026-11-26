@@ -12,7 +12,7 @@ Local test evidence for this refresh: 81 tests, 81 passed, 91% coverage, flake8 
 |---|---|---|---|
 | 1. Lambda extracts Spotify data → raw JSON in S3 | SUPPORTED (code only) | **SUPPORTED** | Now also verified locally |
 | 2. Parquet via Data Wrangler; Glue schema discovery; Athena SQL | PARTIAL | **PARTIAL** | Glue and Athena setup is now in code and verified in moto, but schema discovery and queries have never run |
-| 3. Daily automation; infrastructure setup with EventBridge, IAM and Boto3; repeatable deployment | PARTIAL | **SUPPORTED** | Fixed bucket name, redeploy and teardown, scoped IAM; all verified in moto |
+| 3. Daily automation; infrastructure setup with EventBridge, IAM and Boto3; repeatable deployment | PARTIAL | **SUPPORTED in code (verified in moto only; never deployed to AWS)** | Fixed bucket name, redeploy and teardown, scoped IAM; all verified in moto. "Full pipeline" includes the Glue crawler and Athena steps, which have never run: no crawl has produced tables and no Athena query has been executed (see Claim 2). |
 
 ### Claim 1
 > "Built an automated serverless pipeline that extracts trending data from the Spotify API using AWS Lambda and stores raw JSON in Amazon S3"
@@ -47,7 +47,7 @@ What would move this to SUPPORTED: deploying to an AWS account, running the craw
 ### Claim 3
 > "Automated daily processing and infrastructure setup with EventBridge, IAM, and Boto3, enabling repeatable deployment of the full pipeline"
 
-**Verdict: SUPPORTED** (code, and verified locally with moto; never deployed to AWS). Was PARTIAL at `5148787`.
+**Verdict: SUPPORTED in code (verified in moto only; never deployed to AWS).** Was PARTIAL at `5148787`. "Full pipeline" includes the Glue crawler and Athena steps, which have never run: no crawl has produced tables and no Athena query has been executed (see Claim 2).
 
 | Part | Code | Local verification |
 |---|---|---|
@@ -55,7 +55,7 @@ What would move this to SUPPORTED: deploying to an AWS account, running the craw
 | Infrastructure created by Boto3 code | `deploy_all.py:21-47` calls the S3, IAM, Lambda, EventBridge and Glue/Athena setup functions in order | `tests/test_deployment.py:58` checks that every resource exists after one deploy |
 | IAM | Bucket- and prefix-scoped inline policies, with no `AmazonS3FullAccess` (`infra/setup_iam_roles.py:52-76`; detached from old roles at `:102-103`) | `tests/test_iam_roles.py:41`, `:79` check the policy documents. moto doesn't enforce IAM, so **whether these permissions are enough on AWS is untested**. |
 | Repeatable deployment | Fixed, validated bucket name (`infra/config.py:39`); updates in place on rerun; documented per-region layer ARN with override (`infra/config.py:62`); Lambda runtime `python3.14` (`infra/config.py:26`) | `tests/test_deployment.py:103` (redeploy updates in place), `:204` (teardown removes everything deploy created), `:231` (teardown safe to rerun); `tests/test_lambda_layers.py` (layer ARN selection and rejections) |
-| "Full pipeline" | Deploy now also creates the Athena workgroup; starting the crawler is one command | See Claim 2 for what is still unverified |
+| "Full pipeline" | Deploy now also creates the Glue crawler and the Athena workgroup; starting the crawler is one command | Creation of both is verified in moto, but **the crawler has never run and no Athena query has been executed** (see Claim 2) |
 
 ### What you can and can't defend in an interview now
 
