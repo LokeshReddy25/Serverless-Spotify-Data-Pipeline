@@ -6,8 +6,9 @@ Usage:
 
 Deletes, in order: the EventBridge rule (and its target), both Lambda functions (their resource
 policies go with them), the Lambdas' CloudWatch log groups (created by Lambda at runtime), the Glue
-crawler, the Glue database (with any tables the crawler made), every object and object version in
-the bucket and then the bucket itself, and the three IAM roles with their policies.
+crawler, the Glue database (with any tables the crawler made), the Athena workgroup (with its saved
+queries and history), every object and object version in the bucket and then the bucket itself,
+and the three IAM roles with their policies.
 Anything already gone is reported as "not found" and skipped, so it is safe to rerun.
 """
 import argparse
@@ -15,6 +16,7 @@ import argparse
 from botocore.exceptions import ClientError
 
 from infra import config
+from infra.setup_glue_athena import workgroup_exists
 from infra.setup_iam_roles import ROLE_NAMES
 
 LAMBDA_FUNCTIONS = (config.EXTRACT_FUNCTION, config.TRANSFORM_FUNCTION)
@@ -27,14 +29,26 @@ def planned_resources(bucket):
             + [f"Lambda function {f}" for f in LAMBDA_FUNCTIONS]
             + [f"CloudWatch log group /aws/lambda/{f}" for f in LAMBDA_FUNCTIONS]
             + [f"Glue crawler {config.GLUE_CRAWLER}", f"Glue database {config.GLUE_DATABASE} (and its tables)",
-               f"S3 bucket {bucket} (all objects and versions)"]
+               f"Athena workgroup {config.ATHENA_WORKGROUP}", f"S3 bucket {bucket} (all objects and versions)"]
             + [f"IAM role {r}" for r in ROLE_NAMES])
+
+
+class _NotFound(Exception):
+    pass
+
+
+def _delete_workgroup(athena):
+    if not workgroup_exists(athena):
+        raise _NotFound()
+    athena.delete_work_group(WorkGroup=config.ATHENA_WORKGROUP, RecursiveDeleteOption=True)
 
 
 def _attempt(label, action, results):
     try:
         action()
         results.append((label, "deleted"))
+    except _NotFound:
+        results.append((label, "not found"))
     except ClientError as e:
         if e.response["Error"]["Code"] in MISSING_CODES:
             results.append((label, "not found"))
@@ -89,6 +103,7 @@ def _delete_rule(events):
 def teardown(session, bucket):
     events, lam, logs = session.client("events"), session.client("lambda"), session.client("logs")
     glue, s3, iam = session.client("glue"), session.client("s3"), session.client("iam")
+    athena = session.client("athena")
     account_id = session.client("sts").get_caller_identity()["Account"]
     results = []
 
@@ -106,6 +121,7 @@ def teardown(session, bucket):
                          "then run teardown again.") from None
     _attempt(f"Glue database {config.GLUE_DATABASE}", lambda: glue.delete_database(Name=config.GLUE_DATABASE),
              results)
+    _attempt(f"Athena workgroup {config.ATHENA_WORKGROUP}", lambda: _delete_workgroup(athena), results)
     _attempt(f"S3 bucket {bucket}", lambda: _empty_and_delete_bucket(s3, bucket, account_id), results)
     for role in ROLE_NAMES:
         _attempt(f"IAM role {role}", lambda role=role: _delete_role(iam, role), results)

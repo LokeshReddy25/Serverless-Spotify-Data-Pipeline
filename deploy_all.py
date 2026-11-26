@@ -1,7 +1,7 @@
 """Deploy the whole pipeline.
 
 Usage:
-    python deploy_all.py --bucket-name NAME [--schedule "cron(...)"] [--pandas-layer-arn ARN]
+    python deploy_all.py --bucket-name NAME [--schedule "cron(...)"] [--pandas-layer-arn ARN] [--run-crawler]
     (or set SPOTIFY_PIPELINE_BUCKET instead of --bucket-name)
 
 AWS credentials come from the standard boto3 chain (AWS_PROFILE / SSO / `aws configure`, or
@@ -13,7 +13,8 @@ Remove everything again with: python -m infra.teardown --bucket-name NAME --yes
 """
 import argparse
 
-from infra import config, setup_eventbridge, setup_glue_athena, setup_iam_roles, setup_lambda, setup_s3
+from infra import (config, run_crawler, setup_eventbridge, setup_glue_athena, setup_iam_roles, setup_lambda,
+                   setup_s3)
 from infra.spotify_credentials import get_spotify_credentials
 
 
@@ -22,6 +23,8 @@ def main(argv=None):
     parser.add_argument("--bucket-name", help=f"Fixed bucket name (default: ${config.BUCKET_ENV_VAR})")
     parser.add_argument("--schedule", default=config.DEFAULT_SCHEDULE, help="EventBridge schedule expression")
     parser.add_argument("--pandas-layer-arn", help="Override the AWS SDK for pandas Lambda layer ARN")
+    parser.add_argument("--run-crawler", action="store_true",
+                        help="Start the Glue crawler at the end (useful on redeploys, once data exists)")
     args = parser.parse_args(argv)
 
     session = config.get_session()
@@ -37,10 +40,15 @@ def main(argv=None):
     setup_lambda.deploy_lambdas(session, bucket, client_id, client_secret, args.pandas_layer_arn)
     print("\n[4/5] EventBridge schedule")
     setup_eventbridge.setup_schedule(session.client("events"), session.client("lambda"), args.schedule)
-    print("\n[5/5] Glue database and crawler")
-    setup_glue_athena.setup_glue(session.client("glue"), session.client("iam"), bucket)
+    print("\n[5/5] Glue database, crawler and Athena workgroup")
+    setup_glue_athena.setup_glue_and_athena(session, bucket)
+    if args.run_crawler:
+        run_crawler.start_crawler(session.client("glue"))
 
     print("\nDeployment completed.")
+    if not args.run_crawler:
+        print("After the pipeline has written data, catalog it with: python -m infra.run_crawler --wait")
+    print(f"Query in Athena with workgroup '{config.ATHENA_WORKGROUP}' and database '{config.GLUE_DATABASE}'.")
 
 
 if __name__ == "__main__":

@@ -104,12 +104,28 @@ def test_deploy_is_repeatable(deployed, monkeypatch):
     real_setup_glue = setup_glue_athena.setup_glue
     monkeypatch.setattr(setup_glue_athena, "setup_glue",
                         lambda glue, iam, bucket: real_setup_glue(_GlueWithUpdateCrawler(glue, calls), iam, bucket))
+    workgroup_updates = []
+
+    class AthenaRecorder:  # moto has not implemented athena.update_work_group either
+        def __init__(self, athena):
+            self._athena = athena
+
+        def __getattr__(self, name):
+            return getattr(self._athena, name)
+
+        def update_work_group(self, **kwargs):
+            workgroup_updates.append(kwargs)
+
+    real_setup_wg = setup_glue_athena.setup_athena_workgroup
+    monkeypatch.setattr(setup_glue_athena, "setup_athena_workgroup",
+                        lambda athena, bucket: real_setup_wg(AthenaRecorder(athena), bucket))
 
     deploy_all.main(["--bucket-name", BUCKET])  # second run: updates in place, no new bucket
 
     assert [b["Name"] for b in deployed.client("s3").list_buckets()["Buckets"]] == [BUCKET]
     assert len(_function_names(deployed)) == 2
     assert [c["Name"] for c in calls] == [config.GLUE_CRAWLER]
+    assert [u["WorkGroup"] for u in workgroup_updates] == [config.ATHENA_WORKGROUP]
     assert calls[0]["Targets"]["S3Targets"][0]["Path"] == f"s3://{BUCKET}/transformed_data/"
 
 
@@ -201,10 +217,10 @@ def test_teardown_removes_everything_deploy_created(deployed):
 
     results = dict((label, status) for label, status in teardown.main(["--bucket-name", BUCKET, "--yes"]))
 
-    assert set(results) == set(teardown.planned_resources(BUCKET)) - {
-        f"Glue database {config.GLUE_DATABASE} (and its tables)",
-        f"S3 bucket {BUCKET} (all objects and versions)"} | {
-        f"Glue database {config.GLUE_DATABASE}", f"S3 bucket {BUCKET}"}
+    planned = {p.replace(" (and its tables)", "").replace(" (all objects and versions)", "")
+               for p in teardown.planned_resources(BUCKET)}
+    assert set(results) == planned
+    assert results[f"Athena workgroup {config.ATHENA_WORKGROUP}"] == "deleted"
     assert results[f"CloudWatch log group /aws/lambda/{config.TRANSFORM_FUNCTION}"] == "not found"
     assert all(status == "deleted" for label, status in results.items() if "log group" not in label)
 

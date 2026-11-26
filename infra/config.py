@@ -12,9 +12,13 @@ SCHEDULE_RULE = "SpotifyDailyExtractionRule"
 DEFAULT_SCHEDULE = "cron(0 12 * * ? *)"  # daily, 12:00 UTC
 GLUE_DATABASE = "spotify_db"
 GLUE_CRAWLER = "spotify_data_crawler"
+ATHENA_WORKGROUP = "spotify_workgroup"
+# Safety limit per Athena query in this workgroup (1 GiB). Queries that would scan more are cancelled.
+ATHENA_BYTES_SCANNED_CUTOFF = 1024 ** 3
 
 RAW_PREFIX = "raw_data/to_process/"
 TRANSFORMED_PREFIX = "transformed_data/"
+ATHENA_RESULTS_PREFIX = "athena_results/"
 
 # AWS-managed "AWS SDK for pandas" layer. Override with --pandas-layer-arn or PANDAS_LAYER_ARN
 # if this version is not published in your region.
