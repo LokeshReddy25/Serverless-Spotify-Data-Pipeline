@@ -1,7 +1,5 @@
 import boto3
-import json
 import argparse
-import time
 
 glue_client = boto3.client('glue')
 iam_client = boto3.client('iam')
@@ -22,32 +20,8 @@ def setup_glue_crawler(bucket_name, database_name="spotify_db", crawler_name="sp
     except glue_client.exceptions.AlreadyExistsException:
         print(f"  └── Database {database_name} already exists.")
 
-    # 2. Create IAM Role for Glue
-    role_name = "SpotifyGlueCrawlerRole"
-    trust_policy = {
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Effect": "Allow",
-                "Principal": {"Service": "glue.amazonaws.com"},
-                "Action": "sts:AssumeRole"
-            }
-        ]
-    }
-    try:
-        role_response = iam_client.create_role(
-            RoleName=role_name,
-            AssumeRolePolicyDocument=json.dumps(trust_policy)
-        )
-        role_arn = role_response['Role']['Arn']
-        print(f"✅ Created Glue IAM Role: {role_name}")
-    except iam_client.exceptions.EntityAlreadyExistsException:
-        role_arn = iam_client.get_role(RoleName=role_name)['Role']['Arn']
-        print(f"  └── Glue role {role_name} already exists.")
-
-    iam_client.attach_role_policy(RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole")
-    iam_client.attach_role_policy(RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/AmazonS3FullAccess")
-    time.sleep(5) # Wait for role creation propagation
+    # 2. Glue crawler role (created and scoped to the bucket by setup_iam_roles.py)
+    role_arn = iam_client.get_role(RoleName="SpotifyGlueCrawlerRole")['Role']['Arn']
 
     # 3. Create Glue Crawler
     target_path = f"s3://{bucket_name}/transformed_data/"

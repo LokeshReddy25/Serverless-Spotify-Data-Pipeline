@@ -29,6 +29,8 @@ def fake_aws_env(monkeypatch, tmp_path):
     monkeypatch.setenv("AWS_DEFAULT_REGION", REGION)
     monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "no_credentials"))
     monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "no_config"))
+    # Let moto attach AWS-managed policies such as AWSLambdaBasicExecutionRole.
+    monkeypatch.setenv("MOTO_IAM_LOAD_MANAGED_POLICIES", "true")
 
 
 @pytest.fixture

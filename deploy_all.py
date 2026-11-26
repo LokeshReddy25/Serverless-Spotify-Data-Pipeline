@@ -36,7 +36,7 @@ def main():
 
     py = sys.executable
     run_step([py, 'infra/setup_s3.py', '--bucket-name', bucket_name], child_env)
-    run_step([py, 'infra/setup_iam_roles.py'], child_env)
+    run_step([py, 'infra/setup_iam_roles.py', '--bucket-name', bucket_name], child_env)
     run_step([py, 'infra/setup_lambda.py', '--bucket-name', bucket_name], child_env)
     run_step([py, 'infra/setup_eventbridge.py'], child_env)
     run_step([py, 'infra/setup_glue_athena.py', '--bucket-name', bucket_name], child_env)
