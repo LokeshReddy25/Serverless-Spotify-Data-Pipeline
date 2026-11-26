@@ -1,5 +1,7 @@
 # Measured Results — Serverless Spotify Data Pipeline
 
+> **Note:** this report describes the original code at commit `5148787`. Several issues it lists (no tests, the date bug, `AmazonS3FullAccess` on every role, no teardown, no Athena setup, errors returned as 500s, the secret passed on the command line) were addressed later on the `fix/pipeline-hardening` branch. Those fixes are tested with moto only, not on AWS. See "Known limitations" in the README for the current status.
+
 **Date measured:** 2026-11-26 (local time, UTC+05:30). Source: `results/raw/environment.txt`.
 **Branch:** `docs/measured-results`, base commit `5148787`.
 

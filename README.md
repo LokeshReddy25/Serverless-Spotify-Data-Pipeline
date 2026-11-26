@@ -1,6 +1,8 @@
 # Serverless Spotify Data Pipeline
 
-A small serverless ETL pipeline on AWS. Once a day, a Lambda function fetches the tracks of one Spotify playlist (Top 50 Global by default) through the Spotify Web API and saves the raw JSON to S3. The upload triggers a second Lambda, which uses pandas and AWS Data Wrangler (AWS SDK for pandas) to split the data into album, artist and track tables stored as Parquet. A Glue crawler can then catalog those tables for querying in Amazon Athena. All AWS resources are created by Python/Boto3 scripts.
+A small serverless ETL pipeline on AWS. Once a day, a Lambda function fetches the tracks of one Spotify playlist (Top 50 Global by default) through the Spotify Web API and saves the raw JSON to S3. The upload triggers a second Lambda, which uses pandas and AWS Data Wrangler (AWS SDK for pandas) to split the data into album, artist and track tables stored as Parquet. A Glue crawler catalogs those tables so they can be queried in an Amazon Athena workgroup. Every AWS resource is created, and removed again, by Python/Boto3 scripts.
+
+> **Testing status.** All automated tests run against [moto](https://github.com/getmoto/moto), an in-memory mock of AWS, never against real AWS. Nothing in this repository has been run against a real AWS account since the original deployment, and none of the changes on the `fix/pipeline-hardening` branch have been. See [What is and isn't verified](#what-is-and-isnt-verified).
 
 ## Architecture
 
@@ -12,109 +14,189 @@ flowchart LR
     RAW -->|"S3 ObjectCreated (*.json)"| TR["Lambda: SpotifyTransformData<br/>src/transform_lambda<br/>pandas + awswrangler layer"]
     TR -->|"wr.s3.to_parquet (Snappy)"| PQ[("S3 transformed_data/<br/>albums/ artists/ tracks/")]
     TR -->|copy + delete| DONE[("S3 raw_data/processed/")]
-    PQ -.->|"crawler: started manually"| GC["Glue crawler<br/>spotify_data_crawler"]
+    PQ -.->|"python -m infra.run_crawler"| GC["Glue crawler<br/>spotify_data_crawler"]
     GC -.-> CAT["Glue Data Catalog<br/>spotify_db"]
-    CAT -.-> ATH["Amazon Athena<br/>(queried manually)"]
+    CAT -.-> ATH["Athena workgroup spotify_workgroup<br/>results: s3://bucket/athena_results/"]
 ```
 
-Solid arrows are automated by the deployed code. Dashed arrows are manual steps: the code creates the crawler but never starts it, and it creates no Athena resources.
+Solid arrows run automatically once deployed. Dashed arrows are started by you: the crawler is started with one command (it has no schedule), and Athena queries are run by hand in the workgroup.
 
 | Component | What the code does | File |
 |---|---|---|
-| EventBridge | Creates rule `SpotifyDailyExtractionRule` (daily at 12:00 UTC) targeting the extract Lambda | `infra/setup_eventbridge.py` |
-| Extract Lambda | Gets a Spotify client-credentials token, fetches the first page of one playlist's tracks (`SPOTIFY_PLAYLIST_ID`, default `37i9dQZEVXbMDoHDwVN2tF`), writes the JSON unchanged to `raw_data/to_process/` | `src/extract_lambda/lambda_function.py` |
+| EventBridge | Rule `SpotifyDailyExtractionRule` (daily at 12:00 UTC) targeting the extract Lambda | `infra/setup_eventbridge.py` |
+| Extract Lambda | Gets a Spotify client-credentials token, fetches the first page of one playlist's tracks (`SPOTIFY_PLAYLIST_ID`, default `37i9dQZEVXbMDoHDwVN2tF`), writes the JSON unchanged to `raw_data/to_process/`. Errors are logged and re-raised. | `src/extract_lambda/lambda_function.py` |
 | S3 trigger | `s3:ObjectCreated:*` on `raw_data/to_process/*.json` invokes the transform Lambda | `infra/setup_lambda.py` |
-| Transform Lambda | Builds de-duplicated album, artist and track DataFrames, writes each with `wr.s3.to_parquet` to `transformed_data/<table>/`, moves the raw file to `raw_data/processed/` | `src/transform_lambda/lambda_function.py` |
-| Glue | Creates database `spotify_db`, role `SpotifyGlueCrawlerRole` and crawler `spotify_data_crawler` on `transformed_data/`. The crawler is **not started** by the code. | `infra/setup_glue_athena.py` |
-| Athena | No resources created. Query manually after running the crawler. | — |
-| IAM | Roles `SpotifyExtractLambdaRole` and `SpotifyTransformLambdaRole` (`AWSLambdaBasicExecutionRole` + `AmazonS3FullAccess`); the Glue role (`AWSGlueServiceRole` + `AmazonS3FullAccess`) | `infra/setup_iam_roles.py`, `infra/setup_glue_athena.py` |
+| Transform Lambda | Builds de-duplicated album, artist and track tables, writes each with `wr.s3.to_parquet` to `transformed_data/<table>/`, then moves the raw file to `raw_data/processed/`. On any error it logs, re-raises and leaves the raw file in place. | `src/transform_lambda/lambda_function.py` |
+| Glue | Database `spotify_db` and crawler `spotify_data_crawler` on `transformed_data/` | `infra/setup_glue_athena.py`, `infra/run_crawler.py` |
+| Athena | Workgroup `spotify_workgroup`: results in `s3://<bucket>/athena_results/`, settings enforced, queries scanning more than 1 GiB are cancelled | `infra/setup_glue_athena.py` |
+| IAM | Three roles, each with an inline S3 policy scoped to the pipeline bucket (see [IAM permissions](#iam-permissions)) | `infra/setup_iam_roles.py` |
+
+### Albums table: release dates
+
+Spotify gives `album.release_date` as `YYYY`, `YYYY-MM` or `YYYY-MM-DD`. The albums table keeps the raw string in `album_release_date` and adds `album_release_date_precision` (`year`, `month` or `day`) and `album_release_date_parsed` (a timestamp for the first day of that period, or null if the value isn't a real date, such as Spotify's `0000`). This changed the albums schema: `album_release_date` used to be a timestamp.
 
 ## Project structure
 
 ```text
-├── deploy_all.py               # Runs all infra scripts in order (reads a local credentials.json)
-├── infra/                      # Boto3 scripts that create the AWS resources
-│   ├── setup_s3.py             # Bucket + raw_data/ and transformed_data/ prefixes
-│   ├── setup_iam_roles.py      # Lambda execution roles
-│   ├── setup_lambda.py         # Zips and deploys both Lambdas, adds the S3 trigger
+├── deploy_all.py               # Deploys everything (fixed bucket name, standard AWS credential chain)
+├── infra/                      # Boto3 scripts, run as modules: python -m infra.<name>
+│   ├── config.py               # Shared names, bucket-name and region checks
+│   ├── setup_s3.py             # Bucket (public access blocked)
+│   ├── setup_iam_roles.py      # Three roles with bucket-scoped inline policies
+│   ├── setup_lambda.py         # Packages and deploys both Lambdas, adds the S3 trigger
 │   ├── setup_eventbridge.py    # Daily schedule for the extract Lambda
-│   └── setup_glue_athena.py    # Glue database, crawler role and crawler
+│   ├── setup_glue_athena.py    # Glue database + crawler, Athena workgroup
+│   ├── run_crawler.py          # One command to start (and wait for) the crawler
+│   ├── spotify_credentials.py  # Reads Spotify credentials from env vars or a hidden prompt
+│   └── teardown.py             # Deletes everything deploy_all.py creates
 ├── src/
 │   ├── extract_lambda/         # Spotify API → S3 raw JSON
 │   └── transform_lambda/       # Raw JSON → Parquet (pandas + awswrangler)
-├── benchmarks/                 # Local-only measurement scripts (no AWS, no Spotify calls)
-└── results/                    # Measured results, resume-claims check, raw logs
+├── tests/                      # pytest + moto (no AWS, no Spotify calls)
+├── benchmarks/                 # Local-only measurement scripts
+├── results/                    # Measured results, resume-claims check, raw logs
+├── requirements-dev.txt        # Test and lint dependencies
+└── .github/workflows/tests.yml # CI: flake8 + pytest on every push and pull request
 ```
 
 ## Setup and deployment
 
 ### Prerequisites
-- Python 3.10+ with `boto3`
-- An AWS identity with the permissions listed below
+- Python 3 with `boto3` to run the deploy scripts. The test suite was run on Python 3.11.9 only; the Lambda functions use the `python3.10` runtime.
+- AWS credentials from the standard chain: an AWS CLI profile (`AWS_PROFILE`), SSO, or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in the environment. **No credentials file is read from this repository.**
+- An AWS region set (`AWS_REGION`/`AWS_DEFAULT_REGION` or in the profile). The scripts stop with an error if none is set.
 - A Spotify Developer app (client ID and secret). **Note:** since 27 Nov 2024, Spotify no longer serves Spotify-owned editorial playlists (which include Top 50 Global) to new apps or to development-mode apps without an approved extension ([Spotify announcement](https://developer.spotify.com/blog/2024-11-27-changes-to-the-web-api)). You may need to set `SPOTIFY_PLAYLIST_ID` on the extract Lambda to a playlist your app can read.
 
-### Option A: step by step (recommended; uses your normal AWS profile or SSO)
+### Deploy
 ```bash
-python infra/setup_s3.py --bucket-name YOUR_BUCKET_NAME
-python infra/setup_iam_roles.py
-python infra/setup_lambda.py --bucket-name YOUR_BUCKET_NAME --client-id ID --client-secret SECRET
-python infra/setup_eventbridge.py            # optional: --schedule "cron(...)"
-python infra/setup_glue_athena.py --bucket-name YOUR_BUCKET_NAME
+pip install boto3
+export AWS_PROFILE=my-profile AWS_REGION=eu-west-1        # or any other way of configuring credentials
+export SPOTIFY_PIPELINE_BUCKET=my-unique-bucket-name      # or pass --bucket-name
+export SPOTIFY_CLIENT_ID=...                              # if unset, you are prompted;
+# SPOTIFY_CLIENT_SECRET: if unset, you are prompted with hidden input (recommended over exporting it)
+python deploy_all.py
 ```
-Set `AWS_DEFAULT_REGION` (or a profile region) first. `setup_s3.py` falls back to `us-east-1` and `setup_lambda.py` to `ap-south-1` if no region is set.
+- The bucket name is **fixed**: rerunning `deploy_all.py` with the same name updates the existing resources instead of creating new ones. If the name is taken by another AWS account, the script stops with a clear error.
+- The Spotify secret is never accepted as a command-line argument and is never printed.
+- Options: `--schedule "cron(...)"`, `--pandas-layer-arn ARN` (if the default `AWSSDKPandas-Python310:14` layer isn't published in your region), `--run-crawler`.
 
-### Option B: `deploy_all.py`
-Create a `credentials.json` (git-ignored) with the keys `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`, then run `python deploy_all.py`. The script picks a **random bucket name on every run** and deletes `credentials.json` when it finishes. Because it needs long-lived access keys, Option A is the safer choice.
+Individual steps can also be run on their own, e.g. `python -m infra.setup_s3 --bucket-name NAME` or `python -m infra.setup_lambda --bucket-name NAME`.
 
-### After deployment (manual)
+### After deployment
 1. Wait for the first scheduled run, or invoke `SpotifyExtractData` once yourself.
-2. Start `spotify_data_crawler` in the Glue console.
-3. In Athena, set a query-result location and query `spotify_db`.
+2. Catalog the Parquet files: `python -m infra.run_crawler --wait`. It prints the crawl status and the tables it created.
+3. In Athena, choose workgroup `spotify_workgroup` and database `spotify_db`.
 
-There is no teardown script. Delete the resources by hand: EventBridge rule, both Lambdas, the S3 bucket, the Glue crawler and database, and the three IAM roles.
+### Tear down
+```bash
+python -m infra.teardown --bucket-name NAME          # dry run: lists what would be deleted
+python -m infra.teardown --bucket-name NAME --yes    # deletes
+```
+This deletes the EventBridge rule, both Lambda functions and their CloudWatch log groups, the Glue crawler and database (with its tables), the Athena workgroup, every object in the bucket and the bucket itself, and the three IAM roles. It refuses to delete a bucket owned by another account, and is safe to rerun.
+
+### Secrets: current approach and the better option
+The deploy reads the Spotify client secret from `SPOTIFY_CLIENT_SECRET` or a hidden prompt and stores it as an environment variable of the extract Lambda. That keeps it out of the repository, shell history and process listings, but anyone with `lambda:GetFunctionConfiguration` on the function can read it.
+
+**Better (not implemented):** store the secret in **AWS Secrets Manager**, put only the secret's ARN in the Lambda's environment, grant the extract role `secretsmanager:GetSecretValue` on that one secret, and have the Lambda fetch (and cache) it at runtime. Rotation then doesn't need a redeploy.
 
 ### IAM permissions
 
-**Needed by whoever runs the deploy scripts.** This list comes from the Boto3 calls in `infra/`. It has not been tested against a live account.
+**Runtime roles** (created by `infra/setup_iam_roles.py`; the docstring explains each permission):
+
+| Role | Permissions | Why |
+|---|---|---|
+| `SpotifyExtractLambdaRole` | `AWSLambdaBasicExecutionRole` | CloudWatch Logs |
+| | `s3:PutObject` on `<bucket>/raw_data/to_process/*` | Write the raw JSON |
+| `SpotifyTransformLambdaRole` | `AWSLambdaBasicExecutionRole` | CloudWatch Logs |
+| | `s3:GetObject`, `s3:DeleteObject` on `<bucket>/raw_data/to_process/*` | Read the raw JSON (also the copy source), remove it after copying |
+| | `s3:PutObject` on `<bucket>/raw_data/processed/*` and `<bucket>/transformed_data/*` | Copy destination; Parquet output |
+| `SpotifyGlueCrawlerRole` | `AWSGlueServiceRole` | Data Catalog updates and crawler logs (this AWS-managed policy also covers buckets named `aws-glue-*`, which aren't used) |
+| | `s3:ListBucket` on `<bucket>` limited to prefix `transformed_data/`; `s3:GetObject` on `<bucket>/transformed_data/*` | List and read the Parquet files |
+
+No role gets `AmazonS3FullAccess` any more, and a redeploy detaches it from roles made by the old scripts. These policies were derived from the code and checked in moto, which **does not enforce IAM**, so whether they are sufficient on AWS is untested.
+
+**Needed by whoever runs deploy and teardown** (derived from the Boto3 calls in `infra/`, not tested against AWS):
 
 | Service | Actions |
 |---|---|
-| S3 | `s3:CreateBucket`, `s3:PutObject`, `s3:PutBucketNotification` |
-| IAM | `iam:CreateRole`, `iam:GetRole`, `iam:AttachRolePolicy`, `iam:PassRole` |
-| Lambda | `lambda:CreateFunction`, `lambda:GetFunction`, `lambda:UpdateFunctionCode`, `lambda:UpdateFunctionConfiguration`, `lambda:AddPermission`, `lambda:GetLayerVersion` |
-| EventBridge | `events:PutRule`, `events:PutTargets` |
-| Glue | `glue:CreateDatabase`, `glue:CreateCrawler`, `glue:UpdateCrawler` |
+| S3 | `CreateBucket`, `PutBucketPublicAccessBlock`, `PutBucketNotification`, `ListBucket`, `ListBucketVersions`, `DeleteObject`, `DeleteObjectVersion`, `DeleteBucket` |
+| IAM | `CreateRole`, `GetRole`, `PassRole`, `AttachRolePolicy`, `DetachRolePolicy`, `PutRolePolicy`, `DeleteRolePolicy`, `ListAttachedRolePolicies`, `ListRolePolicies`, `DeleteRole` |
+| Lambda | `CreateFunction`, `GetFunction`, `GetFunctionConfiguration`, `UpdateFunctionCode`, `UpdateFunctionConfiguration`, `AddPermission`, `GetLayerVersion`, `DeleteFunction` |
+| EventBridge | `PutRule`, `PutTargets`, `DescribeRule`, `RemoveTargets`, `DeleteRule` |
+| Glue | `CreateDatabase`, `CreateCrawler`, `UpdateCrawler`, `StartCrawler`, `GetCrawler`, `GetTables`, `DeleteCrawler`, `DeleteDatabase` |
+| Athena | `ListWorkGroups`, `CreateWorkGroup`, `UpdateWorkGroup`, `DeleteWorkGroup` |
+| CloudWatch Logs | `DeleteLogGroup` |
 
-**Attached to the runtime roles by the scripts:** see the IAM row in the component table above. `AmazonS3FullAccess` is broader than needed. A tighter policy would allow only `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject` on this bucket's prefixes.
+Querying in Athena additionally needs the usual Athena and Glue read permissions plus S3 read on `transformed_data/` and read/write on `athena_results/`.
 
 ## Cost note
 
-No cost has been measured; there are no billing records for this project. The billable parts are Lambda invocations (two per day plus any manual runs), S3 storage and requests, Glue crawler runs (billed per run when started), and Athena (billed by data scanned per query). Check current AWS pricing for your region rather than relying on an estimate here.
+No cost has been measured; there are no billing records for this project. The billable parts are Lambda invocations (two per day plus any manual runs), S3 storage and requests, Glue crawler runs (when started), and Athena queries (billed by data scanned; the workgroup cancels any query over 1 GiB). Check current AWS pricing for your region rather than relying on an estimate here.
+
+## Tests and CI
+
+```bash
+pip install -r requirements-dev.txt
+python -m flake8 .
+python -m pytest --cov --cov-report=term-missing
+```
+
+Last local run (2026-11-26, Python 3.11.9, Windows 11, fresh virtualenv from `requirements-dev.txt`): **flake8 clean; 64 tests, 64 passed; 90% coverage** (statements and branches across `src/`, `infra/` and `deploy_all.py`). Raw output: [results/raw/ci_commands_local.txt](results/raw/ci_commands_local.txt).
+
+| Test file | Tests | Covers |
+|---|---|---|
+| `tests/test_extract.py` | 7 | Extract handler: S3 write, playlist override, missing env vars, Spotify HTTP error, missing bucket, secret not logged, HTTP timeout |
+| `tests/test_transform.py` | 9 | Transform handler: 3 Parquet tables, raw file moved, skipped keys, URL-encoded keys, missing object, invalid JSON, no tracks, malformed event, failed Parquet write |
+| `tests/test_release_dates.py` | 3 | Mixed-precision release dates (regression test for the date bug) |
+| `tests/test_iam_roles.py` | 9 | Scoped IAM policies, no `AmazonS3FullAccess`, old attachment removed |
+| `tests/test_secrets_handling.py` | 7 | Credentials from env or prompt, never on the command line or printed |
+| `tests/test_deployment.py` | 21 | Full deploy, redeploy, bucket-name and region errors, teardown |
+| `tests/test_glue_athena.py` | 8 | Athena workgroup, crawler start, wait and failure |
+
+Lowest coverage: `infra/setup_eventbridge.py` at 62%. Its "permission already exists" branch and its command-line entry point aren't exercised.
+
+**All tests use moto, not real AWS.** The Spotify API is stubbed. moto stores IAM policies but does not enforce them, and moto has not implemented `glue.update_crawler` or `athena.update_work_group`, so those two update paths are tested by recording the calls rather than executing them.
+
+`.github/workflows/tests.yml` runs the same flake8 and pytest commands on every push and pull request, using `requirements-dev.txt`, with no AWS credentials or repository secrets. The same commands pass locally (see above), but the workflow itself has not yet been run on GitHub.
 
 ## Results
 
-> **These are local measurements, not AWS measurements.** They were taken on 2026-11-26 on a laptop (i5-12500H, Windows 11), with S3 mocked by moto and a **synthetic 50-track sample** (`benchmarks/sample_data/synthetic_playlist_50.json`) instead of real Spotify data. They don't show how the pipeline performs on AWS Lambda or how big real data is. Full details, commands and raw logs are in [results/results.md](results/results.md).
+> **These are local measurements, not AWS measurements.** They were taken on 2026-11-26, **before the hardening changes** (commit `5148787`), on a laptop (i5-12500H, Windows 11), with S3 mocked by moto and a **synthetic 50-track sample** (`benchmarks/sample_data/synthetic_playlist_50.json`) instead of real Spotify data. They don't show how the pipeline performs on AWS Lambda or how big real data is. Full details, commands and raw logs are in [results/results.md](results/results.md).
 
 | Metric | Value | Measured where |
 |---|---|---|
-| Unit tests | None exist | Repository check |
-| Static checks | 9/9 files compile; pyflakes: 5 warnings, 0 errors | Local |
 | Raw JSON → Parquet size | 28102 B → 20043 B over 3 tables (albums 40, artists 35, tracks 50 rows) | Local, synthetic 50-track sample, S3 mocked |
 | Transform handler execution time | median 341.7 ms (min 290.9, max 418.3, n=5) | Local, synthetic 50-track sample, S3 mocked; **not** AWS Lambda duration |
 | Extract handler execution time | median 26.6 ms (min 22.2, max 28.3, n=5) | Local, Spotify calls stubbed, S3 mocked; **not** AWS Lambda duration |
 
 **NOT MEASURED** (no saved evidence): Lambda duration and memory on AWS, Athena runtime and data scanned, real S3 object sizes, records per real run, number of completed scheduled runs, Glue crawler results, cost.
 
-A check of the resume claims against this code is in [results/resume_claims_check.md](results/resume_claims_check.md).
+A check of the resume claims against the original code is in [results/resume_claims_check.md](results/resume_claims_check.md).
 
 ## Known limitations
 
-- **Mixed date formats lose data.** Spotify gives some album release dates as `YYYY` and others as `YYYY-MM-DD`. `pd.to_datetime(..., errors='coerce')` (`src/transform_lambda/lambda_function.py:86`) infers one format and turns the other into null. In the local synthetic test, 36 of 40 album dates became null. Reproduced on **pandas 3.1.1**; the pandas version in the Lambda layer wasn't tested.
-- **The Glue crawler is not started by the code.** `infra/setup_glue_athena.py` creates it with no schedule; it has to be run by hand.
-- **No Athena setup.** No workgroup, query-result location or saved queries are created. Athena is only used manually.
-- **No teardown script.** Resources have to be deleted by hand, and `deploy_all.py` creates a new randomly named bucket on every run.
-- **Broad S3 permissions.** All IAM roles get the AWS-managed `AmazonS3FullAccess` policy instead of access scoped to this bucket.
-- **Spotify API access.** Since 27 Nov 2024, new Spotify apps (and development-mode apps without an approved extension) may not be able to read Spotify-owned editorial playlists such as the default Top 50 Global ([announcement](https://developer.spotify.com/blog/2024-11-27-changes-to-the-web-api)).
+Status as of the `fix/pipeline-hardening` branch. "Fixed" means fixed in code and covered by moto tests; **none of the fixes have been run on real AWS.**
+
+| Limitation | Status |
+|---|---|
+| Mixed `YYYY` / `YYYY-MM` / `YYYY-MM-DD` release dates were turned into nulls (36 of 40 in the synthetic test, reproduced on pandas 3.1.1), and `0000` became a wrong 1753 timestamp | **Fixed.** Each precision is parsed with its own format; regression tests in `tests/test_release_dates.py` failed before the fix and pass after it (`results/raw/date_bug_{before,after}_fix.txt`). Verified on pandas 3.1.1 only; the Lambda layer's pandas version is untested. |
+| Handlers returned a 500 body instead of failing, so Lambda counted errors as successes | **Fixed.** Both handlers log and re-raise. |
+| The Glue crawler was never started by the code | **Fixed** with a one-command step (`python -m infra.run_crawler --wait`, or `deploy_all.py --run-crawler`). **Still open:** the crawler has no schedule. |
+| No Athena setup | **Fixed.** Workgroup `spotify_workgroup` with a result location and a 1 GiB per-query limit. |
+| No teardown script; random bucket name on every deploy | **Fixed.** `infra/teardown.py`; fixed, configurable bucket name. |
+| Broad S3 permissions (`AmazonS3FullAccess` on every role) | **Fixed** in code (bucket- and prefix-scoped inline policies). **Untested** whether they are sufficient on AWS. |
+| Spotify secret passed on the command line; `deploy_all.py` read AWS keys from `credentials.json` | **Fixed.** Env var or hidden prompt; standard AWS credential chain. |
+| Spotify secret stored as a plain Lambda environment variable | **Still open.** Secrets Manager is the better option (see above). |
+| New Spotify apps may not be able to read Spotify-owned editorial playlists such as Top 50 Global | **Still open.** Outside this code's control; set `SPOTIFY_PLAYLIST_ID` to a playlist your app can read. |
+| Transform Lambda memory is not set, so Lambda's default applies; whether that is enough for pandas is unknown | **Still open, not measured.** |
+| If a Parquet write fails part-way, the retry writes the earlier tables again, so duplicates are possible | **Still open.** The raw file is kept for retry, but writes aren't atomic across the three tables. |
+| Each daily run adds new Parquet files, so a track still in the playlist appears once per day in Athena | **Still open, by design.** Use `DISTINCT` or filter by file date. |
+| The playlist request fetches only the first page (up to 100 tracks) | **Still open.** Enough for a 50-track playlist. |
+
+## What is and isn't verified
+
+- **Verified locally (moto):** both handlers, including error paths; the date fix; deploy creating every resource with the fixed bucket name; redeploy updating in place; teardown removing everything deploy created; the IAM policy documents that get attached; the Athena workgroup settings; the crawler step.
+- **Not verified:** anything on real AWS (IAM sufficiency, the Lambda layer, S3 → Lambda notifications, EventBridge invocations, crawler output, Athena queries); the Spotify API with real credentials; the GitHub Actions workflow on GitHub.
 
 ## Analytics example
 
@@ -129,8 +211,6 @@ JOIN "spotify_db"."albums"  al ON t.album_id  = al.album_id
 ORDER BY t.track_popularity DESC
 LIMIT 10;
 ```
-
-Each run writes new Parquet files, so tracks that stay in the playlist appear once per day. Add `DISTINCT` or filter by file date as needed.
 
 ## 📝 Copyright & License
 Copyright (c) 2026 Lokesh Reddy. All Rights Reserved.
