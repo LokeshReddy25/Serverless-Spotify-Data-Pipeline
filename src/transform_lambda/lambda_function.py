@@ -1,11 +1,16 @@
 import json
-import re
-import boto3
-import pandas as pd
-import awswrangler as wr
+import logging
 import os
+import re
 import urllib.parse
 from datetime import datetime
+
+import awswrangler as wr
+import boto3
+import pandas as pd
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 s3_client = boto3.client('s3')
 
@@ -60,6 +65,14 @@ def process_album(items):
         album_list.append(album_element)
     return pd.DataFrame(album_list, columns=ALBUM_COLUMNS).drop_duplicates(subset=['album_id'])
 
+
+ARTIST_COLUMNS = ['artist_id', 'artist_name', 'artist_url']
+TRACK_COLUMNS = ['track_id', 'track_name', 'track_popularity', 'track_duration_ms', 'album_id', 'artist_id',
+                 'added_at']
+RAW_PREFIX = 'raw_data/to_process/'
+PROCESSED_PREFIX = 'raw_data/processed/'
+
+
 def process_artist(items):
     artist_list = []
     for row in items:
@@ -73,7 +86,8 @@ def process_artist(items):
                 'artist_url': artist.get('external_urls', {}).get('spotify')
             }
             artist_list.append(artist_element)
-    return pd.DataFrame(artist_list).drop_duplicates(subset=['artist_id'])
+    return pd.DataFrame(artist_list, columns=ARTIST_COLUMNS).drop_duplicates(subset=['artist_id'])
+
 
 def process_track(items):
     track_list = []
@@ -87,75 +101,71 @@ def process_track(items):
             'track_popularity': track.get('popularity'),
             'track_duration_ms': track.get('duration_ms'),
             'album_id': track.get('album', {}).get('id'),
-            'artist_id': track.get('artists', [{}])[0].get('id'), # Primary artist
+            'artist_id': (track.get('artists') or [{}])[0].get('id'),  # primary artist
             'added_at': row.get('added_at')
         }
         track_list.append(track_element)
-    return pd.DataFrame(track_list).drop_duplicates(subset=['track_id'])
+    return pd.DataFrame(track_list, columns=TRACK_COLUMNS).drop_duplicates(subset=['track_id'])
+
+
+def transform_object(bucket_name, s3_key):
+    """Transform one raw JSON object into three Parquet tables, then move it to processed/.
+
+    The raw file is moved only after all three tables are written, so a failure leaves it in
+    to_process/ where it can be retried.
+    """
+    logger.info("Processing s3://%s/%s", bucket_name, s3_key)
+    response = s3_client.get_object(Bucket=bucket_name, Key=s3_key)
+    spotify_data = json.loads(response['Body'].read().decode('utf-8'))
+
+    items = spotify_data.get('items', [])
+    track_df = process_track(items)
+    if track_df.empty:
+        raise ValueError(f"No track items found in s3://{bucket_name}/{s3_key}")
+    album_df = process_album(items)
+    artist_df = process_artist(items)
+
+    # album_release_date stays a string; the parsed column already holds datetime objects or None.
+    album_df['album_release_date_parsed'] = pd.to_datetime(album_df['album_release_date_parsed'])
+    track_df['added_at'] = pd.to_datetime(track_df['added_at'], errors='coerce')
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    target_bucket = os.environ.get('TRANSFORMED_S3_BUCKET', bucket_name)
+    for table, df in (('albums', album_df), ('artists', artist_df), ('tracks', track_df)):
+        wr.s3.to_parquet(
+            df=df,
+            path=f"s3://{target_bucket}/transformed_data/{table}/{table[:-1]}_data_{timestamp}.parquet"
+        )
+
+    processed_key = s3_key.replace(RAW_PREFIX, PROCESSED_PREFIX, 1)
+    s3_client.copy_object(CopySource={'Bucket': bucket_name, 'Key': s3_key}, Bucket=bucket_name, Key=processed_key)
+    s3_client.delete_object(Bucket=bucket_name, Key=s3_key)
+    logger.info("Processed %s (%d tracks) and moved it to %s", s3_key, len(track_df), processed_key)
+    return processed_key
+
 
 def lambda_handler(event, context):
+    """Handle an S3 ObjectCreated event for raw_data/to_process/*.json.
+
+    Any failure is logged and re-raised, so Lambda records the invocation as failed
+    instead of reporting success with an error body.
+    """
+    processed, skipped = [], []
     try:
-        bucket_name = event['Records'][0]['s3']['bucket']['name']
-        s3_key = urllib.parse.unquote_plus(event['Records'][0]['s3']['object']['key'], encoding='utf-8')
-        
-        # Ensure we're only processing raw data files
-        if 'raw_data/to_process/' not in s3_key:
-            print(f"Skipping key {s3_key}")
-            return {'statusCode': 200, 'body': 'Skipped'}
+        for record in event['Records']:
+            bucket_name = record['s3']['bucket']['name']
+            s3_key = urllib.parse.unquote_plus(record['s3']['object']['key'], encoding='utf-8')
+            if not s3_key.startswith(RAW_PREFIX):
+                logger.info("Skipping key outside %s: %s", RAW_PREFIX, s3_key)
+                skipped.append(s3_key)
+                continue
+            processed.append(transform_object(bucket_name, s3_key))
+    except Exception:
+        logger.exception("Transform failed.")
+        raise
 
-        print(f"Processing s3://{bucket_name}/{s3_key}")
-        
-        # Read the JSON file from S3
-        response = s3_client.get_object(Bucket=bucket_name, Key=s3_key)
-        file_content = response['Body'].read().decode('utf-8')
-        spotify_data = json.loads(file_content)
-        
-        items = spotify_data.get('items', [])
-        
-        # Transform data into distinct dataframes
-        album_df = process_album(items)
-        artist_df = process_artist(items)
-        track_df = process_track(items)
-        
-        # Force column types to handle potential nulls gracefully during write
-        # album_release_date stays a string; the parsed column already holds datetime objects or None.
-        album_df['album_release_date_parsed'] = pd.to_datetime(album_df['album_release_date_parsed'])
-        track_df['added_at'] = pd.to_datetime(track_df['added_at'], errors='coerce')
-
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        target_bucket = os.environ.get('TRANSFORMED_S3_BUCKET', bucket_name)
-        
-        # Write to S3 as Parquet using AWS Wrangler
-        wr.s3.to_parquet(
-            df=album_df,
-            path=f"s3://{target_bucket}/transformed_data/albums/album_data_{timestamp}.parquet"
-        )
-        wr.s3.to_parquet(
-            df=artist_df,
-            path=f"s3://{target_bucket}/transformed_data/artists/artist_data_{timestamp}.parquet"
-        )
-        wr.s3.to_parquet(
-            df=track_df,
-            path=f"s3://{target_bucket}/transformed_data/tracks/track_data_{timestamp}.parquet"
-        )
-        
-        # Move the raw file to a "processed" folder to avoid reprocessing
-        copy_source = {'Bucket': bucket_name, 'Key': s3_key}
-        processed_key = s3_key.replace('to_process/', 'processed/')
-        
-        s3_client.copy_object(CopySource=copy_source, Bucket=bucket_name, Key=processed_key)
-        s3_client.delete_object(Bucket=bucket_name, Key=s3_key)
-        
-        print(f"Successfully processed {s3_key} and saved output to transformed_data/")
-        
-        return {
-            'statusCode': 200,
-            'body': json.dumps({'message': 'Data transformation successful'})
-        }
-
-    except Exception as e:
-        print(f"Error processing data: {str(e)}")
-        return {
-            'statusCode': 500,
-            'body': json.dumps({'error': str(e)})
-        }
+    return {
+        'statusCode': 200,
+        'body': json.dumps({'message': 'Data transformation successful', 'processed': processed,
+                            'skipped': skipped})
+    }
