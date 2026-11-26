@@ -1,35 +1,47 @@
-import json
+"""Deploy the whole pipeline by running the infra scripts in order.
+
+AWS credentials come from the standard boto3 chain (AWS_PROFILE / SSO / `aws configure`, or
+AWS_ACCESS_KEY_ID etc. in the environment). Nothing is read from a credentials file in the repo.
+Spotify credentials come from SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET or a hidden prompt and are
+passed to the child scripts through the environment, never as command-line arguments.
+"""
 import os
-import subprocess
 import random
+import subprocess
+import sys
 
-with open('credentials.json', 'r') as f:
-    creds = json.load(f)
+import boto3
 
-# Set AWS environment variables so boto3 automatically picks them up securely without saving to terminal history
-os.environ['AWS_ACCESS_KEY_ID'] = creds['AWS_ACCESS_KEY_ID']
-os.environ['AWS_SECRET_ACCESS_KEY'] = creds['AWS_SECRET_ACCESS_KEY']
-os.environ['AWS_DEFAULT_REGION'] = creds['AWS_REGION']
+from infra.spotify_credentials import get_spotify_credentials
 
-# Generate a highly unique bucket name
-bucket_name = f"lokesh-spotify-etl-lake-{random.randint(10000, 99999)}"
-print(f"Assigning unique bucket name: {bucket_name}")
 
-def run_step(cmd):
+def run_step(cmd, env):
     print(f"\n--- Running: {' '.join(cmd)} ---")
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8')
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', env=env)
     print(result.stdout)
     if result.returncode != 0:
         print(f"ERROR:\n{result.stderr}")
-        exit(1)
+        sys.exit(1)
 
-# Execute the pipeline deployment steps
-run_step(['python', 'infra/setup_s3.py', '--bucket-name', bucket_name])
-run_step(['python', 'infra/setup_iam_roles.py'])
-run_step(['python', 'infra/setup_lambda.py', '--bucket-name', bucket_name, '--client-id', creds['SPOTIFY_CLIENT_ID'], '--client-secret', creds['SPOTIFY_CLIENT_SECRET']])
-run_step(['python', 'infra/setup_eventbridge.py'])
-run_step(['python', 'infra/setup_glue_athena.py', '--bucket-name', bucket_name])
 
-# Clean up secure credentials file now that deployment is complete
-os.remove('credentials.json')
-print("\n✅ Deployment completed! Credentials file has been securely deleted.")
+def main():
+    if not boto3.Session().region_name:
+        sys.exit("ERROR: no AWS region configured. Set AWS_REGION / AWS_DEFAULT_REGION or a profile region.")
+
+    client_id, client_secret = get_spotify_credentials()
+    child_env = dict(os.environ, SPOTIFY_CLIENT_ID=client_id, SPOTIFY_CLIENT_SECRET=client_secret)
+
+    bucket_name = f"lokesh-spotify-etl-lake-{random.randint(10000, 99999)}"
+    print(f"Assigning unique bucket name: {bucket_name}")
+
+    py = sys.executable
+    run_step([py, 'infra/setup_s3.py', '--bucket-name', bucket_name], child_env)
+    run_step([py, 'infra/setup_iam_roles.py'], child_env)
+    run_step([py, 'infra/setup_lambda.py', '--bucket-name', bucket_name], child_env)
+    run_step([py, 'infra/setup_eventbridge.py'], child_env)
+    run_step([py, 'infra/setup_glue_athena.py', '--bucket-name', bucket_name], child_env)
+    print("\nDeployment completed.")
+
+
+if __name__ == '__main__':
+    main()

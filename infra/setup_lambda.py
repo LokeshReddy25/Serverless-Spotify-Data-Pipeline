@@ -4,6 +4,8 @@ import zipfile
 import argparse
 import time
 
+from spotify_credentials import get_spotify_credentials
+
 lambda_client = boto3.client('lambda')
 s3_client = boto3.client('s3')
 iam_client = boto3.client('iam')
@@ -98,9 +100,10 @@ def setup_s3_trigger(bucket_name, lambda_arn):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Deploy Lambdas")
     parser.add_argument('--bucket-name', required=True)
-    parser.add_argument('--client-id', required=True, help="Spotify Client ID")
-    parser.add_argument('--client-secret', required=True, help="Spotify Client Secret")
     args = parser.parse_args()
+    # Spotify credentials come from SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET or a hidden prompt,
+    # never from command-line arguments (which are visible in process listings and shell history).
+    client_id, client_secret = get_spotify_credentials()
 
     # Need role ARNs from setup_iam_roles
     extract_role = iam_client.get_role(RoleName="SpotifyExtractLambdaRole")['Role']['Arn']
@@ -114,8 +117,8 @@ if __name__ == '__main__':
         zip_file="extract_lambda.zip",
         handler="lambda_function.lambda_handler",
         env_vars={
-            'SPOTIFY_CLIENT_ID': args.client_id,
-            'SPOTIFY_CLIENT_SECRET': args.client_secret,
+            'SPOTIFY_CLIENT_ID': client_id,
+            'SPOTIFY_CLIENT_SECRET': client_secret,
             'S3_BUCKET_NAME': args.bucket_name
         }
     )
