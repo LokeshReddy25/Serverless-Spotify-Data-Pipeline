@@ -89,7 +89,8 @@ def one_trial(sample_path):
             res["parquet_objects"][table] = {"key": o["Key"], "bytes": o["Size"], "rows": len(df),
                                              "columns": list(df.columns),
                                              "dtypes": {c: str(t) for c, t in df.dtypes.items()}}
-        import pyarrow.parquet as pq, io
+        import io
+        import pyarrow.parquet as pq
         body = s3.get_object(Bucket=BUCKET, Key=objs[0]["Key"])["Body"].read()
         md = pq.ParquetFile(io.BytesIO(body)).metadata
         res["parquet_compression_codec"] = md.row_group(0).column(0).compression

@@ -1,84 +1,90 @@
-import boto3
-import json
+"""Create the Glue database, the crawler over transformed_data/, and an Athena workgroup.
+
+Usage: python -m infra.setup_glue_athena --bucket-name NAME
+
+The crawler is created but not started here, because right after deployment there is no data to
+crawl. Start it with `python -m infra.run_crawler --wait` (or `deploy_all.py --run-crawler`).
+The Athena workgroup writes query results to s3://<bucket>/athena_results/ and cancels any query
+that would scan more than ATHENA_BYTES_SCANNED_CUTOFF bytes.
+"""
 import argparse
-import time
 
-glue_client = boto3.client('glue')
-iam_client = boto3.client('iam')
-athena_client = boto3.client('athena')
+from infra import config
+from infra.setup_iam_roles import GLUE_ROLE
 
-def setup_glue_crawler(bucket_name, database_name="spotify_db", crawler_name="spotify_data_crawler"):
-    print("🚀 Setting up Glue and Athena...")
-    
-    # 1. Create Glue Database
+
+def setup_glue(glue, iam, bucket):
     try:
-        glue_client.create_database(
-            DatabaseInput={
-                'Name': database_name,
-                'Description': 'Database for Spotify Analytics Pipeline'
-            }
-        )
-        print(f"✅ Created Glue Database: {database_name}")
-    except glue_client.exceptions.AlreadyExistsException:
-        print(f"  └── Database {database_name} already exists.")
+        glue.create_database(DatabaseInput={"Name": config.GLUE_DATABASE,
+                                            "Description": "Database for Spotify Analytics Pipeline"})
+        print(f"Created Glue database: {config.GLUE_DATABASE}")
+    except glue.exceptions.AlreadyExistsException:
+        print(f"Glue database {config.GLUE_DATABASE} already exists.")
 
-    # 2. Create IAM Role for Glue
-    role_name = "SpotifyGlueCrawlerRole"
-    trust_policy = {
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Effect": "Allow",
-                "Principal": {"Service": "glue.amazonaws.com"},
-                "Action": "sts:AssumeRole"
-            }
-        ]
+    crawler = {
+        "Name": config.GLUE_CRAWLER,
+        "Role": iam.get_role(RoleName=GLUE_ROLE)["Role"]["Arn"],
+        "DatabaseName": config.GLUE_DATABASE,
+        "Targets": {"S3Targets": [{"Path": f"s3://{bucket}/{config.TRANSFORMED_PREFIX}"}]},
+        "SchemaChangePolicy": {"UpdateBehavior": "UPDATE_IN_DATABASE", "DeleteBehavior": "DEPRECATE_IN_DATABASE"},
+        "RecrawlPolicy": {"RecrawlBehavior": "CRAWL_EVERYTHING"},
     }
     try:
-        role_response = iam_client.create_role(
-            RoleName=role_name,
-            AssumeRolePolicyDocument=json.dumps(trust_policy)
-        )
-        role_arn = role_response['Role']['Arn']
-        print(f"✅ Created Glue IAM Role: {role_name}")
-    except iam_client.exceptions.EntityAlreadyExistsException:
-        role_arn = iam_client.get_role(RoleName=role_name)['Role']['Arn']
-        print(f"  └── Glue role {role_name} already exists.")
+        glue.create_crawler(**crawler)
+        print(f"Created Glue crawler: {config.GLUE_CRAWLER}")
+    except glue.exceptions.AlreadyExistsException:
+        glue.update_crawler(**crawler)
+        print(f"Updated Glue crawler: {config.GLUE_CRAWLER}")
 
-    iam_client.attach_role_policy(RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole")
-    iam_client.attach_role_policy(RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/AmazonS3FullAccess")
-    time.sleep(5) # Wait for role creation propagation
 
-    # 3. Create Glue Crawler
-    target_path = f"s3://{bucket_name}/transformed_data/"
-    try:
-        glue_client.create_crawler(
-            Name=crawler_name,
-            Role=role_arn,
-            DatabaseName=database_name,
-            Targets={'S3Targets': [{'Path': target_path}]},
-            SchemaChangePolicy={'UpdateBehavior': 'UPDATE_IN_DATABASE', 'DeleteBehavior': 'DEPRECATE_IN_DATABASE'},
-            RecrawlPolicy={'RecrawlBehavior': 'CRAWL_EVERYTHING'}
-        )
-        print(f"✅ Created Glue Crawler: {crawler_name} pointing to {target_path}")
-    except glue_client.exceptions.AlreadyExistsException:
-        print(f"  └── Crawler {crawler_name} already exists. Updating its target path...")
-        glue_client.update_crawler(
-            Name=crawler_name,
-            Role=role_arn,
-            DatabaseName=database_name,
-            Targets={'S3Targets': [{'Path': target_path}]},
-            SchemaChangePolicy={'UpdateBehavior': 'UPDATE_IN_DATABASE', 'DeleteBehavior': 'DEPRECATE_IN_DATABASE'},
-            RecrawlPolicy={'RecrawlBehavior': 'CRAWL_EVERYTHING'}
-        )
-        print(f"✅ Updated Crawler: {crawler_name} target to {target_path}")
+def athena_output_location(bucket):
+    return f"s3://{bucket}/{config.ATHENA_RESULTS_PREFIX}"
 
-    print(f"\n✅ You can now run the crawler from the AWS Console to catalog the parquet files.")
-    print("Tip: Run it after executing the Extract & Transform Lambdas at least once.")
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--bucket-name', required=True)
-    args = parser.parse_args()
-    
-    setup_glue_crawler(args.bucket_name)
+def workgroup_exists(athena, name=config.ATHENA_WORKGROUP):
+    kwargs = {}
+    while True:  # botocore has no paginator for list_work_groups
+        page = athena.list_work_groups(**kwargs)
+        if any(wg["Name"] == name for wg in page["WorkGroups"]):
+            return True
+        if not page.get("NextToken"):
+            return False
+        kwargs["NextToken"] = page["NextToken"]
+
+
+def setup_athena_workgroup(athena, bucket):
+    output = athena_output_location(bucket)
+    if workgroup_exists(athena):
+        athena.update_work_group(WorkGroup=config.ATHENA_WORKGROUP, ConfigurationUpdates={
+            "ResultConfigurationUpdates": {"OutputLocation": output},
+            "EnforceWorkGroupConfiguration": True,
+            "BytesScannedCutoffPerQuery": config.ATHENA_BYTES_SCANNED_CUTOFF,
+        })
+        print(f"Updated Athena workgroup: {config.ATHENA_WORKGROUP} -> {output}")
+    else:
+        athena.create_work_group(
+            Name=config.ATHENA_WORKGROUP,
+            Description="Queries over the Spotify pipeline's Glue database",
+            Configuration={
+                "ResultConfiguration": {"OutputLocation": output},
+                "EnforceWorkGroupConfiguration": True,
+                "PublishCloudWatchMetricsEnabled": True,
+                "BytesScannedCutoffPerQuery": config.ATHENA_BYTES_SCANNED_CUTOFF,
+            })
+        print(f"Created Athena workgroup: {config.ATHENA_WORKGROUP} -> {output}")
+
+
+def setup_glue_and_athena(session, bucket):
+    setup_glue(session.client("glue"), session.client("iam"), bucket)
+    setup_athena_workgroup(session.client("athena"), bucket)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Create the Glue database, crawler and Athena workgroup")
+    parser.add_argument("--bucket-name", help=f"Bucket name (default: ${config.BUCKET_ENV_VAR})")
+    args = parser.parse_args(argv)
+    setup_glue_and_athena(config.get_session(), config.resolve_bucket_name(args.bucket_name))
+
+
+if __name__ == "__main__":
+    main()

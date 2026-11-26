@@ -1,0 +1,15 @@
+$ python -m pytest -p no:warnings -vv tests/test_release_dates.py   # AFTER fix
+============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-9.2.0, pluggy-1.7.0 -- C:\Users\acer\AppData\Local\Temp\claude\ae87c5c792a7d17a\6c59c81b-3566-4fb6-bdd4-68b4eeb293d1\scratchpad\venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\acer\Desktop\Serverless-Spotify-Data-Pipeline
+configfile: setup.cfg
+plugins: cov-7.1.0
+collecting ... collected 3 items
+
+tests/test_release_dates.py::test_mixed_precision_release_dates_are_not_lost PASSED [ 33%]
+tests/test_release_dates.py::test_invalid_release_dates_become_null_without_affecting_others PASSED [ 66%]
+tests/test_release_dates.py::test_no_release_dates_lost_on_synthetic_sample PASSED [100%]
+
+============================== 3 passed in 2.37s ==============================
+exit=0

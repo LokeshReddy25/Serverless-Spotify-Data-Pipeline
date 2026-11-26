@@ -1,5 +1,7 @@
 # Results Summary
 
+> **Note:** this report describes the original code at commit `5148787`. Several issues it lists (no tests, the date bug, `AmazonS3FullAccess` on every role, no teardown, no Athena setup, errors returned as 500s, the secret passed on the command line) were addressed later on the `fix/pipeline-hardening` branch. Those fixes are tested with moto only, not on AWS. See "Known limitations" in the README for the current status.
+
 Date: 2026-11-26 · Branch: `docs/measured-results` · Machine: i5-12500H (12C/16T), 15.71 GiB RAM, Windows 11 Home 10.0.26300.
 Details: [results/results.md](results/results.md) · Claims check: [results/resume_claims_check.md](results/resume_claims_check.md) · Raw logs: `results/raw/`
 

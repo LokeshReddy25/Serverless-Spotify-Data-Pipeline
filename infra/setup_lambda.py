@@ -1,149 +1,123 @@
-import boto3
-import os
-import zipfile
+"""Package and deploy both Lambda functions and wire the S3 trigger for the transform Lambda.
+
+Usage: python -m infra.setup_lambda --bucket-name NAME [--pandas-layer-arn ARN]
+Spotify credentials come from SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET or a hidden prompt.
+"""
 import argparse
+import io
+import os
 import time
+import zipfile
+from pathlib import Path
 
-lambda_client = boto3.client('lambda')
-s3_client = boto3.client('s3')
-iam_client = boto3.client('iam')
+from botocore.exceptions import ClientError
 
-def create_zip(source_dir, output_filename):
-    print(f"📦 Zipping {source_dir} to {output_filename}")
-    with zipfile.ZipFile(output_filename, 'w') as z:
+from infra import config
+from infra.setup_iam_roles import EXTRACT_ROLE, TRANSFORM_ROLE
+from infra.spotify_credentials import get_spotify_credentials
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+RUNTIME = "python3.10"
+HANDLER = "lambda_function.lambda_handler"
+# A newly created IAM role can take a few seconds before Lambda is allowed to assume it.
+ROLE_PROPAGATION_RETRIES = 6
+ROLE_PROPAGATION_DELAY_S = 5
+
+
+def build_zip(source_dir):
+    """Zip the .py files of a Lambda source folder in memory (nothing is written to disk)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for root, _, files in os.walk(source_dir):
-            for file in files:
-                if file.endswith('.py'):
-                    file_path = os.path.join(root, file)
-                    arcname = os.path.relpath(file_path, source_dir)
-                    z.write(file_path, arcname)
+            for name in sorted(files):
+                if name.endswith(".py"):
+                    path = os.path.join(root, name)
+                    z.write(path, os.path.relpath(path, source_dir))
+    return buf.getvalue()
 
-def deploy_lambda(function_name, role_arn, zip_file, handler, env_vars, layers=None, timeout=60):
+
+def _create_function(lam, **kwargs):
+    for attempt in range(ROLE_PROPAGATION_RETRIES):
+        try:
+            return lam.create_function(**kwargs)["FunctionArn"]
+        except ClientError as e:
+            role_not_ready = (e.response["Error"]["Code"] == "InvalidParameterValueException"
+                              and "cannot be assumed" in str(e))
+            if role_not_ready and attempt < ROLE_PROPAGATION_RETRIES - 1:
+                print(f"  Role not assumable yet; retrying in {ROLE_PROPAGATION_DELAY_S}s...")
+                time.sleep(ROLE_PROPAGATION_DELAY_S)
+                continue
+            raise
+
+
+def deploy_lambda(lam, name, role_arn, zip_bytes, env_vars, layers=None, timeout=60):
+    """Create the function, or update its code AND configuration (role, layers, env, timeout)."""
+    settings = {"Role": role_arn, "Handler": HANDLER, "Runtime": RUNTIME, "Timeout": timeout,
+                "Environment": {"Variables": env_vars}, "Layers": layers or []}
     try:
-        with open(zip_file, 'rb') as f:
-            zip_content = f.read()
+        arn = _create_function(lam, FunctionName=name, Code={"ZipFile": zip_bytes}, **settings)
+        print(f"Created Lambda: {name}")
+    except lam.exceptions.ResourceConflictException:
+        lam.update_function_code(FunctionName=name, ZipFile=zip_bytes)
+        lam.get_waiter("function_updated").wait(FunctionName=name)
+        lam.update_function_configuration(FunctionName=name, **settings)
+        lam.get_waiter("function_updated").wait(FunctionName=name)
+        arn = lam.get_function(FunctionName=name)["Configuration"]["FunctionArn"]
+        print(f"Updated Lambda: {name}")
+    lam.get_waiter("function_active").wait(FunctionName=name)
+    return arn
 
-        kwargs = {
-            'FunctionName': function_name,
-            'Runtime': 'python3.10',
-            'Role': role_arn,
-            'Handler': handler,
-            'Code': {'ZipFile': zip_content},
-            'Timeout': timeout,
-            'Environment': {'Variables': env_vars}
-        }
-        if layers:
-            kwargs['Layers'] = layers
 
-        response = lambda_client.create_function(**kwargs)
-        print(f"✅ Created Lambda: {function_name}")
-        return response['FunctionArn']
+def setup_s3_trigger(s3, lam, bucket, function_arn, account_id):
+    """Invoke the transform Lambda for every new raw_data/to_process/*.json object.
 
-    except lambda_client.exceptions.ResourceConflictException:
-        print(f"Lambda {function_name} already exists. Updating code...")
-        with open(zip_file, 'rb') as f:
-            lambda_client.update_function_code(FunctionName=function_name, ZipFile=f.read())
-        
-        # Wait for the update to complete before updating configuration
-        waiter = lambda_client.get_waiter('function_updated')
-        waiter.wait(FunctionName=function_name)
-        
-        lambda_client.update_function_configuration(
-            FunctionName=function_name,
-            Environment={'Variables': env_vars},
-            Timeout=timeout
-        )
-        print(f"✅ Updated Lambda: {function_name}")
-        return lambda_client.get_function(FunctionName=function_name)['Configuration']['FunctionArn']
-
-def setup_s3_trigger(bucket_name, lambda_arn):
-    """Wait for Lambda active state, add permission, and attach S3 trigger"""
-    # Important: Give Lambda permission to be invoked by S3
+    Note: this replaces the bucket's whole notification configuration (the bucket is dedicated
+    to this pipeline).
+    """
     try:
-        lambda_client.add_permission(
-            FunctionName=lambda_arn,
-            StatementId=f's3-trigger-{bucket_name}',
-            Action='lambda:InvokeFunction',
-            Principal='s3.amazonaws.com',
-            SourceArn=f"arn:aws:s3:::{bucket_name}"
-        )
-        print("  └── Added S3 Invoke Permission to Transform Lambda")
-    except lambda_client.exceptions.ResourceConflictException:
-        pass # Permission already exists
+        lam.add_permission(FunctionName=function_arn, StatementId="s3-invoke-transform",
+                           Action="lambda:InvokeFunction", Principal="s3.amazonaws.com",
+                           SourceArn=f"arn:aws:s3:::{bucket}", SourceAccount=account_id)
+    except lam.exceptions.ResourceConflictException:
+        pass  # permission already present
+    s3.put_bucket_notification_configuration(Bucket=bucket, NotificationConfiguration={
+        "LambdaFunctionConfigurations": [{
+            "LambdaFunctionArn": function_arn,
+            "Events": ["s3:ObjectCreated:*"],
+            "Filter": {"Key": {"FilterRules": [{"Name": "prefix", "Value": config.RAW_PREFIX},
+                                               {"Name": "suffix", "Value": ".json"}]}},
+        }]})
+    print(f"Configured S3 trigger: {config.RAW_PREFIX}*.json -> {config.TRANSFORM_FUNCTION}")
 
-    # Configure S3 bucket notification
-    notification_config = {
-        'LambdaFunctionConfigurations': [
-            {
-                'LambdaFunctionArn': lambda_arn,
-                'Events': ['s3:ObjectCreated:*'],
-                'Filter': {
-                    'Key': {
-                        'FilterRules': [
-                            {'Name': 'prefix', 'Value': 'raw_data/to_process/'},
-                            {'Name': 'suffix', 'Value': '.json'}
-                        ]
-                    }
-                }
-            }
-        ]
-    }
-    
-    s3_client.put_bucket_notification_configuration(
-        Bucket=bucket_name,
-        NotificationConfiguration=notification_config
-    )
-    print(f"✅ Configured S3 Trigger: raw_data/to_process/*.json will trigger Transform Lambda")
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Deploy Lambdas")
-    parser.add_argument('--bucket-name', required=True)
-    parser.add_argument('--client-id', required=True, help="Spotify Client ID")
-    parser.add_argument('--client-secret', required=True, help="Spotify Client Secret")
-    args = parser.parse_args()
+def deploy_lambdas(session, bucket, client_id, client_secret, layer_arn=None):
+    iam, lam = session.client("iam"), session.client("lambda")
+    extract_role = iam.get_role(RoleName=EXTRACT_ROLE)["Role"]["Arn"]
+    transform_role = iam.get_role(RoleName=TRANSFORM_ROLE)["Role"]["Arn"]
 
-    # Need role ARNs from setup_iam_roles
-    extract_role = iam_client.get_role(RoleName="SpotifyExtractLambdaRole")['Role']['Arn']
-    transform_role = iam_client.get_role(RoleName="SpotifyTransformLambdaRole")['Role']['Arn']
+    # The secret is stored as a Lambda environment variable. See README: Secrets Manager is better.
+    deploy_lambda(lam, config.EXTRACT_FUNCTION, extract_role, build_zip(REPO_ROOT / "src" / "extract_lambda"),
+                  {"SPOTIFY_CLIENT_ID": client_id, "SPOTIFY_CLIENT_SECRET": client_secret,
+                   "S3_BUCKET_NAME": bucket})
+    transform_arn = deploy_lambda(
+        lam, config.TRANSFORM_FUNCTION, transform_role, build_zip(REPO_ROOT / "src" / "transform_lambda"),
+        {"TRANSFORMED_S3_BUCKET": bucket}, layers=[config.pandas_layer_arn(session.region_name, layer_arn)])
 
-    # 1. Package & Deploy Extract Lambda
-    create_zip('src/extract_lambda', 'extract_lambda.zip')
-    extract_lambda_arn = deploy_lambda(
-        function_name="SpotifyExtractData",
-        role_arn=extract_role,
-        zip_file="extract_lambda.zip",
-        handler="lambda_function.lambda_handler",
-        env_vars={
-            'SPOTIFY_CLIENT_ID': args.client_id,
-            'SPOTIFY_CLIENT_SECRET': args.client_secret,
-            'S3_BUCKET_NAME': args.bucket_name
-        }
-    )
+    account_id = session.client("sts").get_caller_identity()["Account"]
+    setup_s3_trigger(session.client("s3"), lam, bucket, transform_arn, account_id)
 
-    # 2. Package & Deploy Transform Lambda
-    # We use AWS Data Wrangler managed layer for Pandas and awswrangler
-    current_region = boto3.Session().region_name or 'ap-south-1'
-    wrangler_layer_arn = f"arn:aws:lambda:{current_region}:336392948345:layer:AWSSDKPandas-Python310:14"
 
-    create_zip('src/transform_lambda', 'transform_lambda.zip')
-    transform_lambda_arn = deploy_lambda(
-        function_name="SpotifyTransformData",
-        role_arn=transform_role,
-        zip_file="transform_lambda.zip",
-        handler="lambda_function.lambda_handler",
-        env_vars={'TRANSFORMED_S3_BUCKET': args.bucket_name},
-        layers=[wrangler_layer_arn]
-    )
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Deploy the pipeline Lambdas")
+    parser.add_argument("--bucket-name", help=f"Bucket name (default: ${config.BUCKET_ENV_VAR})")
+    parser.add_argument("--pandas-layer-arn", help=f"Override the AWS SDK for pandas layer "
+                                                   f"(default: ${config.PANDAS_LAYER_ENV_VAR} or v14)")
+    args = parser.parse_args(argv)
+    session = config.get_session()
+    bucket = config.resolve_bucket_name(args.bucket_name)
+    client_id, client_secret = get_spotify_credentials()
+    deploy_lambdas(session, bucket, client_id, client_secret, args.pandas_layer_arn)
 
-    # Clean up zip files
-    os.remove('extract_lambda.zip')
-    os.remove('transform_lambda.zip')
 
-    # Wait a few seconds for IAM attachment and Lambda states to propagate
-    print("Sleeping for 5s to allow resources to propagate...")
-    time.sleep(5)
-
-    # 3. Add S3 event trigger for Transform Lambda
-    setup_s3_trigger(args.bucket_name, transform_lambda_arn)
-    
-    print("\n✅ All Lambdas Deployed Successfully!")
+if __name__ == "__main__":
+    main()

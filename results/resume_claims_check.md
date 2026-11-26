@@ -1,5 +1,7 @@
 # Resume Claims vs. Code
 
+> **Note:** this report describes the original code at commit `5148787`. Several issues it lists (no tests, the date bug, `AmazonS3FullAccess` on every role, no teardown, no Athena setup, errors returned as 500s, the secret passed on the command line) were addressed later on the `fix/pipeline-hardening` branch. Those fixes are tested with moto only, not on AWS. See "Known limitations" in the README for the current status.
+
 Checked against commit `5148787` on 2026-11-26. "Code supports it" means the code does it. It does not mean there is evidence the code ran: **the repo has no logs, screenshots or outputs from AWS** (see `results/results.md`).
 
 ## Claim 1

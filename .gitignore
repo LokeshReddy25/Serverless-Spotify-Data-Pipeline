@@ -39,3 +39,8 @@ test_spotify.py
 # IDEs
 .vscode/
 .idea/
+
+# Test artifacts
+.coverage
+.pytest_cache/
+htmlcov/
