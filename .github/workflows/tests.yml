@@ -12,19 +12,43 @@ permissions:
 
 jobs:
   test:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Development pins (requirements-dev.txt).
+          - name: py3.11 dev pins
+            python: "3.11"
+            requirements: requirements-dev.txt
+            pandas: ""
+          # Python 3.10 + the versions verified for Lambda layer AWSSDKPandas-Python310:14
+          # (awswrangler 3.7.2, pyarrow 14.0.1). The layer's pandas version is NOT documented,
+          # so two pandas versions are tested; see requirements-lambda310.txt.
+          - name: py3.10 layer pins, pandas 2.1.4
+            python: "3.10"
+            requirements: requirements-lambda310.txt
+            pandas: "pandas==2.1.4"
+          - name: py3.10 layer pins, pandas 2.2.3
+            python: "3.10"
+            requirements: requirements-lambda310.txt
+            pandas: "pandas==2.2.3"
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
           cache: pip
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: ${{ matrix.requirements }}
 
-      - name: Install dev requirements
-        run: python -m pip install -r requirements-dev.txt
+      - name: Install requirements
+        run: python -m pip install -r ${{ matrix.requirements }} ${{ matrix.pandas }}
+
+      - name: Show key versions
+        run: python -c "import sys, pandas, numpy, pyarrow, awswrangler; print(sys.version, pandas.__version__, numpy.__version__, pyarrow.__version__, awswrangler.__version__)"
 
       - name: Lint (flake8)
         run: python -m flake8 .
